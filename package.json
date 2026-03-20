@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Local pi package for task/tasks runtime and audit workflow.",
-  "keywords": ["pi-package", "pi", "task", "tasks"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "task",
+    "tasks"
+  ],
   "scripts": {
     "test": "node --test tests/task/*.mjs",
     "smoke": "bash scripts/task-audit-smoke.sh"
@@ -17,6 +22,8 @@
     "@sinclair/typebox": "*"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions/task"
+    ]
   }
 }
