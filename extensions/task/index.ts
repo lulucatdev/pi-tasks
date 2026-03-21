@@ -1017,35 +1017,7 @@ export default function taskExtension(pi: ExtensionAPI) {
 			ctx.ui.setStatus("tasks-ui", ctx.ui.theme.fg("success", `tasks ${visibleRecentRuns.length} recent`));
 		}
 
-		ctx.ui.setWidget(
-			"tasks-ui",
-			(_tui, theme) => {
-				const lines: string[] = [];
-				const formatRun = (run: TaskRunRecord) => {
-					const status = renderRunStatusLabel(theme, run.status, run.auditClassification);
-					return `${status} ${theme.fg("accent", run.title)} ${theme.fg("muted", `- ${run.detail}`)}`;
-				};
-
-				lines.push(theme.fg("accent", theme.bold(" Tasks Board ")));
-				if (activeRuns.length > 0) {
-					lines.push(theme.fg("muted", "Active"));
-					for (const run of activeRuns.slice(0, 3)) lines.push(formatRun(run));
-				}
-				if (visibleRecentRuns.length > 0) {
-					lines.push(theme.fg("muted", activeRuns.length > 0 ? "Recent" : "Recent Runs"));
-					for (const run of visibleRecentRuns.slice(0, 3)) lines.push(formatRun(run));
-				}
-				lines.push(theme.fg("dim", "Use /tasks-ui for details, rerun, copy, paste, abort"));
-
-				return {
-					render(width: number) {
-						return lines.map((line) => truncateToWidth(line, width));
-					},
-					invalidate() {},
-				};
-			},
-			{ placement: "belowEditor" },
-		);
+		ctx.ui.setWidget("tasks-ui", undefined);
 		notifyDashboards();
 	};
 
