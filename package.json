@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local pi package for task/tasks runtime and audit workflow.",
+  "description": "Local pi package for task/tasks runtime.",
   "keywords": [
     "pi-package",
     "pi",
@@ -11,8 +11,7 @@
     "tasks"
   ],
   "scripts": {
-    "test": "node --test tests/task/*.mjs",
-    "smoke": "bash scripts/task-audit-smoke.sh"
+    "test": "node --test tests/task/*.mjs"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",

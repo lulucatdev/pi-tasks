@@ -8,17 +8,29 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { copyToClipboard, getMarkdownTheme, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { registerTasksStartCommand } from "./commands.ts";
-import { mergeTaskRunHistoryPreferAudit } from "./task-history.ts";
-import { extractDisplayItems, extractFinalOutput, type TaskDisplayItem } from "./task-output.ts";
-import { resolveCompletedRunStatus } from "./task-status.ts";
-import { executeTasksRunFlow } from "./run-tasks.ts";
-import { readDiscoverableBatchRuns, renderRunStatusLabel, type DiscoverableBatchRun } from "./task-ui.ts";
+import { extractDisplayItems, extractFinalOutput } from "./task-output.ts";
+import {
+	executeTasksRunFlow,
+	resolveCompletedRunStatus,
+	toPersistedDetails,
+	type DisplayItem,
+	type LiveTaskResult,
+	type NormalizedTaskSpec,
+	type OnUpdateCallback,
+	type PersistedTaskResult,
+	type RunStatus,
+	type TaskRunRecord,
+	type TasksDetails,
+	type TasksSummary,
+	type TasksToolParams,
+	type TaskStatus,
+	type UsageStats,
+} from "./run-tasks.ts";
 
 const MAX_TASKS = 100;
 const MAX_CONCURRENCY = 20;
@@ -28,102 +40,18 @@ const MAX_RECENT_RUNS = 12;
 const TASK_UI_LIST_WINDOW = 10;
 const WORKER_SYSTEM_PROMPT = [
 	"You are an isolated task worker spawned by the current root agent.",
-	"Complete the assigned task directly and return the most useful result you can.",
-	"Use direct local inspection tools for file search, routing lookup, and code reading.",
+	"Complete the assigned task using direct local inspection tools for file search, routing lookup, and code reading.",
 	"Do not attempt to delegate work to other agents or tasks.",
+	"",
+	"IMPORTANT — Output file:",
+	"An output file has been pre-created for you (path given in the task prompt).",
+	"Use the write tool to save your findings, results, and any valuable information to this file.",
+	"You may write to it at any point during your work — not just at the end.",
+	"Write whenever you have meaningful results to persist. Overwrite or append as you see fit.",
+	"When you are done, ensure the output file contains a complete, well-structured record of your work.",
 ].join("\n");
 const pendingAbortTaskIds = new Set<string>();
 
-type TaskStatus = "queued" | "running" | "success" | "error" | "aborted";
-type RunStatus = "running" | "success" | "error" | "aborted";
-
-type DisplayItem = TaskDisplayItem;
-type OnUpdateCallback = (partial: AgentToolResult<TasksDetails>) => void;
-
-interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	contextTokens: number;
-	turns: number;
-}
-
-interface TaskSpecInput {
-	name?: string;
-	task: string;
-	cwd?: string;
-}
-
-interface NormalizedTaskSpec {
-	id: string;
-	name?: string;
-	task: string;
-	cwd: string;
-}
-
-interface LiveTaskResult extends NormalizedTaskSpec {
-	status: TaskStatus;
-	messages: Message[];
-	stderr: string;
-	usage: UsageStats;
-	model?: string;
-	stopReason?: string;
-	errorMessage?: string;
-	exitCode?: number;
-}
-
-interface PersistedTaskResult extends NormalizedTaskSpec {
-	status: TaskStatus;
-	output: string;
-	error?: string;
-	usage: UsageStats;
-	model?: string;
-	displayItems: DisplayItem[];
-}
-
-interface TasksSummary {
-	total: number;
-	queued: number;
-	running: number;
-	success: number;
-	error: number;
-	aborted: number;
-}
-
-interface TasksDetails {
-	results: LiveTaskResult[];
-	summary: TasksSummary;
-}
-
-interface PersistedTasksDetails {
-	results: PersistedTaskResult[];
-	summary: TasksSummary;
-}
-
-interface TaskRunSummary {
-	id: string;
-	batchId?: string;
-	status: RunStatus;
-	title: string;
-	cwd: string;
-	toolName: "task" | "tasks";
-	startedAt: number;
-	finishedAt?: number;
-	detail: string;
-	tasks: NormalizedTaskSpec[];
-	auditClassification?: "complete" | "incomplete";
-}
-
-interface TaskRunRecord extends TaskRunSummary {
-	params?: TasksToolParams;
-	details?: PersistedTasksDetails;
-}
-
-interface TasksToolParams {
-	tasks: TaskSpecInput[];
-}
 
 function emptyUsage(): UsageStats {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
@@ -234,17 +162,6 @@ function formatToolCall(
 	}
 }
 
-function buildSummary(results: Array<{ status: TaskStatus }>): TasksSummary {
-	const summary: TasksSummary = { total: results.length, queued: 0, running: 0, success: 0, error: 0, aborted: 0 };
-	for (const result of results) {
-		summary[result.status]++;
-	}
-	return summary;
-}
-
-function buildDetails(results: LiveTaskResult[]): TasksDetails {
-	return { results, summary: buildSummary(results) };
-}
 
 function getResultError(result: LiveTaskResult): string | undefined {
 	if (result.status === "aborted") return "Task was aborted.";
@@ -294,39 +211,8 @@ function aggregateUsage(results: Array<{ usage: UsageStats }>): UsageStats {
 	return total;
 }
 
-function toPersistedTaskResult(result: LiveTaskResult): PersistedTaskResult {
-	return {
-		id: result.id,
-		name: result.name,
-		task: result.task,
-		cwd: result.cwd,
-		status: result.status,
-		output: extractFinalOutput(result.messages),
-		error: getResultError(result),
-		usage: { ...result.usage },
-		model: result.model,
-		displayItems: extractDisplayItems(result.messages),
-	};
-}
 
-function toPersistedDetails(details: TasksDetails): PersistedTasksDetails {
-	return {
-		results: details.results.map((result) => toPersistedTaskResult(result)),
-		summary: { ...details.summary },
-	};
-}
 
-function buildRunTitle(tasks: NormalizedTaskSpec[]): string {
-	if (tasks.length === 1) {
-		const task = tasks[0];
-		return task.name ?? shortenText(task.task, 56);
-	}
-	return `${tasks.length} tasks`;
-}
-
-function cloneTaskParams(params: TasksToolParams): TasksToolParams {
-	return JSON.parse(JSON.stringify(params)) as TasksToolParams;
-}
 
 function buildPromptText(record: TaskRunRecord): string {
 	if (!record.params?.tasks?.length) return "No runnable task payload stored for this run.";
@@ -347,95 +233,11 @@ function buildPromptText(record: TaskRunRecord): string {
 	return lines.join("\n");
 }
 
-function toTaskRunRecord(run: DiscoverableBatchRun): TaskRunRecord {
-	return {
-		id: run.id,
-		batchId: run.batchId,
-		status: run.status,
-		title: run.title,
-		cwd: run.cwd,
-		toolName: run.toolName,
-		startedAt: run.startedAt,
-		finishedAt: run.finishedAt,
-		detail: run.detail,
-		tasks: run.tasks.map((task) => ({ ...task })),
-		details: {
-			results: run.details.results.map((result) => ({
-				...result,
-				usage: { ...result.usage },
-				displayItems: result.displayItems.map((item) => (item.type === "text" ? { ...item } : { ...item, args: { ...item.args } })),
-			})),
-			summary: { ...run.details.summary },
-		},
-		auditClassification: run.auditClassification,
-	};
-}
 
-function createQueuedResult(task: NormalizedTaskSpec): LiveTaskResult {
-	return {
-		...task,
-		status: "queued",
-		messages: [],
-		stderr: "",
-		usage: emptyUsage(),
-	};
-}
-
-function createAbortedResult(task: NormalizedTaskSpec, errorMessage = "Task was aborted."): LiveTaskResult {
-	return {
-		...task,
-		status: "aborted",
-		messages: [],
-		stderr: "",
-		usage: emptyUsage(),
-		errorMessage,
-	};
-}
-
-function collectTaskIds(runs: TaskRunRecord[]): Set<string> {
-	const ids = new Set<string>();
-	for (const run of runs) {
-		for (const task of run.tasks) ids.add(task.id);
-	}
-	return ids;
-}
-
-function generateTaskId(existingIds: Set<string>): string {
-	while (true) {
-		const id = Math.floor(Math.random() * 1000000).toString().padStart(6, "0");
-		if (!existingIds.has(id)) {
-			existingIds.add(id);
-			return id;
-		}
-	}
-}
-
-function normalizeTasks(params: TasksToolParams, defaultCwd: string, existingIds: Set<string>): NormalizedTaskSpec[] {
-	return params.tasks.map((task) => ({
-		id: generateTaskId(existingIds),
-		name: task.name?.trim() || undefined,
-		task: task.task,
-		cwd: task.cwd ?? defaultCwd,
-	}));
-}
-
-function buildTaskRunRecord(params: TasksToolParams, tasks: NormalizedTaskSpec[], cwd: string): TaskRunRecord {
-	return {
-		id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-		status: "running",
-		title: buildRunTitle(tasks),
-		cwd,
-		startedAt: Date.now(),
-		detail: buildRunDetail({ total: tasks.length, queued: tasks.length, running: 0, success: 0, error: 0, aborted: 0 }, Date.now()),
-		tasks,
-		params: cloneTaskParams(params),
-	};
-}
 
 function summarizeCompletedRun(
 	run: TaskRunRecord,
 	details: TasksDetails,
-	auditClassification: "complete" | "incomplete" = "complete",
 ): TaskRunRecord {
 	const finishedAt = Date.now();
 	const detail = buildRunDetail(details.summary, run.startedAt, finishedAt);
@@ -443,14 +245,14 @@ function summarizeCompletedRun(
 		...run,
 		status: getRunStatus(details.summary),
 		finishedAt,
-		detail: auditClassification === "incomplete" ? `${detail} · audit incomplete` : detail,
+		detail,
 		details: toPersistedDetails(details),
-		auditClassification,
 	};
 }
 
 function buildWorkerPrompt(task: NormalizedTaskSpec): string {
 	const lines: string[] = [];
+	lines.push(`Output file: ${task.outputPath}`);
 	if (task.name) lines.push(`Task name: ${task.name}`);
 	lines.push("Task:");
 	lines.push(task.task);
@@ -465,27 +267,6 @@ function writePromptToTempFile(prefix: string, prompt: string): { dir: string; f
 	return { dir: tempDir, filePath };
 }
 
-async function mapWithConcurrencyLimit<TInput, TOutput>(
-	items: TInput[],
-	concurrency: number,
-	fn: (item: TInput, index: number) => Promise<TOutput>,
-): Promise<TOutput[]> {
-	if (items.length === 0) return [];
-	const limit = Math.max(1, Math.min(concurrency, items.length));
-	const results: TOutput[] = new Array(items.length);
-	let nextIndex = 0;
-
-	const workers = new Array(limit).fill(null).map(async () => {
-		while (true) {
-			const current = nextIndex++;
-			if (current >= items.length) return;
-			results[current] = await fn(items[current], current);
-		}
-	});
-
-	await Promise.all(workers);
-	return results;
-}
 
 async function runSingleTask(
 	task: NormalizedTaskSpec,
@@ -493,7 +274,6 @@ async function runSingleTask(
 	onUpdate: ((result: LiveTaskResult) => void) | undefined,
 	fallbackModel: string | undefined,
 	fallbackThinking: string | undefined,
-	onLaunch: (() => void) | undefined,
 ): Promise<LiveTaskResult> {
 	const workerSystem = writePromptToTempFile(`system-${task.id}`, WORKER_SYSTEM_PROMPT);
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
@@ -527,13 +307,6 @@ async function runSingleTask(
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env, PI_CHILD_TYPE: "task" },
 			});
-			let didLaunch = false;
-			const acknowledgeLaunch = () => {
-				if (didLaunch) return;
-				didLaunch = true;
-				onLaunch?.();
-			};
-
 			let buffer = "";
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -572,8 +345,6 @@ async function runSingleTask(
 				}
 			};
 
-			proc.once("spawn", acknowledgeLaunch);
-
 			proc.stdout.on("data", (data) => {
 				buffer += data.toString();
 				const lines = buffer.split("\n");
@@ -585,9 +356,14 @@ async function runSingleTask(
 				currentResult.stderr += data.toString();
 			});
 
+			let procExited = false;
+
 			proc.on("close", (code) => {
+				procExited = true;
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				// code is null when killed by signal — treat as error exit
+				// wasAborted is only set by our killProc, not by external signals
+				resolve(code ?? 1);
 			});
 
 			proc.on("error", (error) => {
@@ -600,7 +376,8 @@ async function runSingleTask(
 					wasAborted = true;
 					proc.kill("SIGTERM");
 					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
+						// proc.killed only means "signal was sent", not "process exited"
+						if (!procExited) proc.kill("SIGKILL");
 					}, 5000);
 				};
 				if (signal.aborted) killProc();
@@ -627,35 +404,12 @@ async function runSingleTask(
 	}
 }
 
-function buildResultText(details: TasksDetails): string {
-	const lines: string[] = [];
-	const { summary } = details;
-	const summaryParts: string[] = [];
-	if (summary.success) summaryParts.push(`${summary.success} success`);
-	if (summary.error) summaryParts.push(`${summary.error} error`);
-	if (summary.aborted) summaryParts.push(`${summary.aborted} aborted`);
-	if (summaryParts.length === 0) summaryParts.push("0 finished");
-	lines.push(`TASKS complete: ${summaryParts.join(", ")}`);
-	for (const result of details.results) {
-		const identity = canonicalTaskLabel(result);
-		const output = result.status === "error" || result.status === "aborted" ? getResultError(result) || "Task failed." : extractFinalOutput(result.messages) || "(no output)";
-		lines.push(`\n${identity} - ${result.status}:\n${output}`);
-	}
-	return lines.join("\n");
-}
 
-function buildLiveStatusText(details: TasksDetails): string {
-	const { summary } = details;
-	return `TASKS running: ${summary.success + summary.error + summary.aborted}/${summary.total} done, ${summary.running} running${summary.queued ? `, ${summary.queued} queued` : ""}`;
-}
-
-function parseTasksUICommandArgs(rawArgs: unknown): { mode: "dashboard" | "show" | "logs" | "abort"; id?: string } {
+function parseTasksUICommandArgs(rawArgs: unknown): { mode: "dashboard" | "show" | "abort"; id?: string } {
 	const trimmed = String(rawArgs ?? "").trim();
 	if (!trimmed) return { mode: "dashboard" };
 	const abortMatch = trimmed.match(/^abort\s+(\d{6})$/i);
 	if (abortMatch) return { mode: "abort", id: abortMatch[1] };
-	const logsMatch = trimmed.match(/^logs\s+(\d{6})$/i);
-	if (logsMatch) return { mode: "logs", id: logsMatch[1] };
 	const showMatch = trimmed.match(/^(\d{6})$/);
 	if (showMatch) return { mode: "show", id: showMatch[1] };
 	return { mode: "dashboard" };
@@ -734,8 +488,11 @@ class TaskDashboardComponent {
 		this.invalidate();
 	}
 
-	private renderRunStatus(status: RunStatus, auditClassification: "complete" | "incomplete" | undefined = "complete"): string {
-		return renderRunStatusLabel(this.theme, status, auditClassification);
+	private renderRunStatus(status: RunStatus): string {
+		if (status === "running") return this.theme.fg("warning", "RUN");
+		if (status === "success") return this.theme.fg("success", "OK");
+		if (status === "aborted") return this.theme.fg("warning", "ABT");
+		return this.theme.fg("error", "ERR");
 	}
 
 	private renderTaskStatus(status: TaskStatus): string {
@@ -788,7 +545,7 @@ class TaskDashboardComponent {
 			const selected = index === this.selectedIndex;
 			const prefix = selected ? this.theme.fg("accent", ">") : this.theme.fg("dim", " ");
 			const kind = item.kind === "active" ? this.theme.fg("warning", "now") : this.theme.fg("muted", "last");
-			const header = `${prefix} ${this.renderRunStatus(item.record.status, item.record.auditClassification)} ${kind} ${this.theme.fg("text", item.record.title)}`;
+			const header = `${prefix} ${this.renderRunStatus(item.record.status)} ${kind} ${this.theme.fg("text", item.record.title)}`;
 			const meta = `  ${formatTimestamp(item.record.finishedAt ?? item.record.startedAt)} | ${item.record.detail}`;
 			lines.push(truncateToWidth(header, width));
 			lines.push(truncateToWidth(this.theme.fg(selected ? "text" : "muted", meta), width));
@@ -810,7 +567,7 @@ class TaskDashboardComponent {
 			return lines.map((line) => truncateToWidth(line, width));
 		}
 
-		lines.push(`${this.renderRunStatus(record.status, record.auditClassification)} ${this.theme.fg("text", record.title)}`);
+		lines.push(`${this.renderRunStatus(record.status)} ${this.theme.fg("text", record.title)}`);
 		lines.push(this.theme.fg("muted", `${record.cwd}`));
 		lines.push(this.theme.fg("muted", `${record.detail} | started ${formatTimestamp(record.startedAt)}`));
 		lines.push("");
@@ -829,7 +586,7 @@ class TaskDashboardComponent {
 	private buildDetailLines(record: TaskRunRecord, width: number): string[] {
 		const rows = Math.max(18, this.getViewportRows());
 		const headerLines = [
-			`${this.renderRunStatus(record.status, record.auditClassification)} ${this.theme.fg("accent", this.theme.bold(record.title))}`,
+			`${this.renderRunStatus(record.status)} ${this.theme.fg("accent", this.theme.bold(record.title))}`,
 			this.theme.fg("muted", `${record.cwd}`),
 			this.theme.fg("dim", `Started ${formatTimestamp(record.startedAt)}${record.finishedAt ? ` | Finished ${formatTimestamp(record.finishedAt)}` : ""} | ${record.detail}`),
 			"",
@@ -1007,8 +764,6 @@ export default function taskExtension(pi: ExtensionAPI) {
 		if (activeRuns.length > 0) {
 			const runningTasks = activeRuns.reduce((sum, run) => sum + (run.details?.summary.running ?? run.tasks.length), 0);
 			ctx.ui.setStatus("tasks-ui", ctx.ui.theme.fg("warning", `tasks ${runningTasks} running`));
-		} else if (visibleRecentRuns[0]?.auditClassification === "incomplete") {
-			ctx.ui.setStatus("tasks-ui", ctx.ui.theme.fg("warning", "tasks last inc"));
 		} else if (visibleRecentRuns[0]?.status === "error") {
 			ctx.ui.setStatus("tasks-ui", ctx.ui.theme.fg("error", "tasks last err"));
 		} else if (visibleRecentRuns[0]?.status === "aborted") {
@@ -1022,35 +777,27 @@ export default function taskExtension(pi: ExtensionAPI) {
 	};
 
 	const restoreTaskHistory = async (ctx: ExtensionContext) => {
-		activeRuns = [];
-		const restored = new Map<string, TaskRunRecord>();
+		// Preserve currently active runs so in-flight tasks can still finalize
+		const currentlyActive = new Set(activeRuns.map((r) => r.id));
+
+		const restored: TaskRunRecord[] = [];
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom") continue;
 			if (entry.customType !== TASK_RUN_RECORD_TYPE) continue;
 			const data = entry.data as TaskRunRecord | undefined;
 			if (!data?.id) continue;
-			restored.set(data.id, data);
+			// Don't restore records for runs that are still active
+			if (!currentlyActive.has(data.id)) restored.push(data);
 		}
 
-		let discoverableRuns: DiscoverableBatchRun[] = [];
-		try {
-			discoverableRuns = await readDiscoverableBatchRuns(ctx.cwd);
-		} catch {
-			discoverableRuns = [];
-		}
-		const mergedRuns = mergeTaskRunHistoryPreferAudit(
-			Array.from(restored.values()),
-			discoverableRuns.map((run) => toTaskRunRecord(run)),
-		);
-
-		recentRuns = mergedRuns
+		recentRuns = restored
 			.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt))
 			.slice(0, MAX_RECENT_RUNS);
 		updateTaskUI(ctx);
 	};
 
 	const startRun = (run: TaskRunRecord, ctx: ExtensionContext) => {
-		activeRuns = [run, ...activeRuns.filter((item) => item.id !== run.id)].slice(0, MAX_RECENT_RUNS);
+		activeRuns = [run, ...activeRuns.filter((item) => item.id !== run.id)];
 		updateTaskUI(ctx);
 	};
 
@@ -1063,11 +810,10 @@ export default function taskExtension(pi: ExtensionAPI) {
 		runId: string,
 		details: TasksDetails,
 		ctx: ExtensionContext,
-		options?: { auditClassification?: "complete" | "incomplete" },
 	) => {
 		const current = activeRuns.find((item) => item.id === runId);
 		if (!current) return;
-		const record = summarizeCompletedRun(current, details, options?.auditClassification ?? "complete");
+		const record = summarizeCompletedRun(current, details);
 		activeRuns = activeRuns.filter((item) => item.id !== runId);
 		recentRuns = [record, ...recentRuns.filter((item) => item.id !== runId)].slice(0, MAX_RECENT_RUNS);
 		pi.appendEntry(TASK_RUN_RECORD_TYPE, record);

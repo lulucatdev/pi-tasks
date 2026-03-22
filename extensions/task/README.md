@@ -12,9 +12,10 @@ Features:
 - Optional per-task `name` for human-readable identity
 - Automatic 6-digit numeric `id` for every task run
 - No nested task creation inside child workers
-- Every successfully initialized `task(...)` and `tasks(...)` run writes `.pi/tasks/<batch-id>/batch.json`, `events.jsonl`, and `tasks/<task-id>.json`
+- Worker agents write their results to a pre-created `.pi/tasks/<id>.md` output file
+- The tool result returns the absolute path so the root agent can read it
 - Persistent tasks widget below the editor for active and recent runs
-- `/tasks-ui` dashboard for inspecting runs, reopening details, rerunning, copying prompts, pasting prompts, aborting running tasks, and surfacing discoverable incomplete batches as incomplete
+- `/tasks-ui` dashboard for inspecting runs, reopening details, rerunning, copying prompts, pasting prompts, and aborting running tasks
 
 Quick examples:
 - `/tasks-start`
@@ -24,7 +25,6 @@ Quick examples:
 - `/tasks-ui`
 - `/tasks-ui 042731`
 - `/tasks-ui abort 042731`
-- `/tasks-ui logs 042731`
 
 `/tasks-ui` keys:
 - `Up/Down` or `j/k`: move selection
@@ -36,8 +36,8 @@ Quick examples:
 - `Esc`: close, or return from detail view
 
 Notes:
-- `/tasks-start` only inserts or prints visible guidance; it does not create audit files or switch the session into a hidden tasks mode.
-- Initialized task batches live under `.pi/tasks/`; pre-init leftovers stay hidden, while discoverable interrupted batches remain visible in `/tasks-ui` as incomplete.
+- `/tasks-start` only inserts or prints visible guidance; it does not create hidden files or switch the session into a hidden tasks mode.
+- Task output files live under `.pi/tasks/`.
 - Task workers inherit the current model unless pi resolves a different model at runtime.
 - Task workers inherit the current tool environment except `task`, `tasks`, and `subagent*` tools.
 - Task results are identified as `name + id` when a name exists, otherwise `task + id`.
