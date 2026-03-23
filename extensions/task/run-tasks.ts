@@ -122,7 +122,7 @@ export interface RunTasksDependencies {
   ) => Promise<LiveTaskResult>;
   activeTaskControllers: Map<string, AbortController>;
   pendingAbortTaskIds: Set<string>;
-  generateTaskId?: (existingIds: Set<string>) => string;
+  generateTaskId?: (existingIds: Set<string>, label?: string) => string;
 }
 
 function emptyUsage(): UsageStats {
@@ -250,23 +250,37 @@ export function collectTaskIds(runs: TaskRunRecord[]): Set<string> {
   return ids;
 }
 
-export function generateTaskId(existingIds: Set<string>): string {
-  while (true) {
-    const now = new Date();
-    const ts = [
-      now.getFullYear().toString(),
-      (now.getMonth() + 1).toString().padStart(2, "0"),
-      now.getDate().toString().padStart(2, "0"),
-      "-",
-      now.getHours().toString().padStart(2, "0"),
-      now.getMinutes().toString().padStart(2, "0"),
-      now.getSeconds().toString().padStart(2, "0"),
-    ].join("");
-    const suffix = Math.floor(Math.random() * 10_000).toString().padStart(4, "0");
-    const id = `${ts}-${suffix}`;
-    if (!existingIds.has(id)) {
-      existingIds.add(id);
-      return id;
+function slugify(text: string, maxLen = 48): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLen)
+    .replace(/-+$/, "");
+}
+
+export function generateTaskId(existingIds: Set<string>, label?: string): string {
+  const now = new Date();
+  const ts = [
+    now.getFullYear().toString(),
+    (now.getMonth() + 1).toString().padStart(2, "0"),
+    now.getDate().toString().padStart(2, "0"),
+    now.getHours().toString().padStart(2, "0"),
+    now.getMinutes().toString().padStart(2, "0"),
+    now.getSeconds().toString().padStart(2, "0"),
+  ].join("");
+  const slug = slugify(label || "task");
+  let id = `${ts}-${slug}`;
+  if (!existingIds.has(id)) {
+    existingIds.add(id);
+    return id;
+  }
+  // Append numeric suffix on collision
+  for (let i = 2; ; i++) {
+    const candidate = `${id}-${i}`;
+    if (!existingIds.has(candidate)) {
+      existingIds.add(candidate);
+      return candidate;
     }
   }
 }
@@ -297,11 +311,12 @@ export function normalizeTasks(
   tasks: TaskSpecInput[],
   defaultCwd: string,
   existingIds: Set<string>,
-  createTaskId: (existingIds: Set<string>) => string = generateTaskId,
+  createTaskId: (existingIds: Set<string>, label?: string) => string = generateTaskId,
 ): NormalizedTaskSpec[] {
   const rootCwd = path.resolve(defaultCwd);
   return tasks.map((task) => {
-    const id = createTaskId(existingIds);
+    const label = task.name?.trim() || task.task;
+    const id = createTaskId(existingIds, label);
     return {
       id,
       name: task.name?.trim() || undefined,

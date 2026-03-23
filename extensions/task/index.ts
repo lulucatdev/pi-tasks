@@ -408,9 +408,9 @@ async function runSingleTask(
 function parseTasksUICommandArgs(rawArgs: unknown): { mode: "dashboard" | "show" | "abort"; id?: string } {
 	const trimmed = String(rawArgs ?? "").trim();
 	if (!trimmed) return { mode: "dashboard" };
-	const abortMatch = trimmed.match(/^abort\s+(\d{8}-\d{6}-\d{4})$/i);
+	const abortMatch = trimmed.match(/^abort\s+(\d{14}-.+)$/i);
 	if (abortMatch) return { mode: "abort", id: abortMatch[1] };
-	const showMatch = trimmed.match(/^(\d{8}-\d{6}-\d{4})$/);
+	const showMatch = trimmed.match(/^(\d{14}-.+)$/);
 	if (showMatch) return { mode: "show", id: showMatch[1] };
 	return { mode: "dashboard" };
 }
