@@ -252,9 +252,18 @@ export function collectTaskIds(runs: TaskRunRecord[]): Set<string> {
 
 export function generateTaskId(existingIds: Set<string>): string {
   while (true) {
-    const id = Math.floor(Math.random() * 1_000_000)
-      .toString()
-      .padStart(6, "0");
+    const now = new Date();
+    const ts = [
+      now.getFullYear().toString(),
+      (now.getMonth() + 1).toString().padStart(2, "0"),
+      now.getDate().toString().padStart(2, "0"),
+      "-",
+      now.getHours().toString().padStart(2, "0"),
+      now.getMinutes().toString().padStart(2, "0"),
+      now.getSeconds().toString().padStart(2, "0"),
+    ].join("");
+    const suffix = Math.floor(Math.random() * 10_000).toString().padStart(4, "0");
+    const id = `${ts}-${suffix}`;
     if (!existingIds.has(id)) {
       existingIds.add(id);
       return id;

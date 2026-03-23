@@ -1,7 +1,7 @@
 /**
  * Tasks extension.
  *
- * Root-only parallel task workers with optional task names and generated 6-digit ids.
+ * Root-only parallel task workers with optional task names and generated timestamped ids.
  */
 
 import { spawn } from "node:child_process";
@@ -408,9 +408,9 @@ async function runSingleTask(
 function parseTasksUICommandArgs(rawArgs: unknown): { mode: "dashboard" | "show" | "abort"; id?: string } {
 	const trimmed = String(rawArgs ?? "").trim();
 	if (!trimmed) return { mode: "dashboard" };
-	const abortMatch = trimmed.match(/^abort\s+(\d{6})$/i);
+	const abortMatch = trimmed.match(/^abort\s+(\d{8}-\d{6}-\d{4})$/i);
 	if (abortMatch) return { mode: "abort", id: abortMatch[1] };
-	const showMatch = trimmed.match(/^(\d{6})$/);
+	const showMatch = trimmed.match(/^(\d{8}-\d{6}-\d{4})$/);
 	if (showMatch) return { mode: "show", id: showMatch[1] };
 	return { mode: "dashboard" };
 }
@@ -978,10 +978,10 @@ export default function taskExtension(pi: ExtensionAPI) {
 		description: [
 			"Launch a single isolated leaf worker using the current root agent configuration.",
 			"The task may include an optional human-readable name.",
-			"The task run receives a generated 6-digit numeric id.",
+			"The task run receives a generated timestamped id.",
 			"Task workers inherit the current environment except they cannot call task or tasks again.",
 		].join(" "),
-		promptSnippet: "Launch one isolated task worker and track it by optional name plus 6-digit id.",
+		promptSnippet: "Launch one isolated task worker and track it by optional name plus timestamped id.",
 		promptGuidelines: [
 			"Reason about the task first, then call task only if one isolated worker is actually useful.",
 			"Use task when you want exactly one isolated worker.",
@@ -1072,10 +1072,10 @@ export default function taskExtension(pi: ExtensionAPI) {
 		description: [
 			"Launch isolated leaf workers in parallel using the current root agent configuration.",
 			"Each task may include an optional human-readable name.",
-			"Each task run receives a generated 6-digit numeric id.",
+			"Each task run receives a generated timestamped id.",
 			"Task workers inherit the current environment except they cannot call task or tasks again.",
 		].join(" "),
-		promptSnippet: "Launch one or more isolated task workers in parallel and track them by name plus 6-digit id.",
+		promptSnippet: "Launch one or more isolated task workers in parallel and track them by name plus timestamped id.",
 		promptGuidelines: [
 			"Reason about the problem first, then call tasks only when independent work items really exist.",
 			"Use tasks when you want the root agent to fan out independent work in parallel.",

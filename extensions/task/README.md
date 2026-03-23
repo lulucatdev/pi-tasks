@@ -10,7 +10,7 @@ Features:
 - `task` tool for launching one isolated task worker
 - `tasks` tool for launching one or more isolated task workers in parallel
 - Optional per-task `name` for human-readable identity
-- Automatic 6-digit numeric `id` for every task run
+- Automatic timestamped `id` (`YYYYMMDD-HHmmss-XXXX`) for every task run
 - No nested task creation inside child workers
 - Worker agents write their results to a pre-created `.pi/tasks/<id>.md` output file
 - The tool result returns the absolute path so the root agent can read it
