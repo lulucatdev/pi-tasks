@@ -206,7 +206,7 @@ function aggregateUsage(results: Array<{ usage: UsageStats }>): UsageStats {
 		total.cacheRead += entry.usage.cacheRead;
 		total.cacheWrite += entry.usage.cacheWrite;
 		total.cost += entry.usage.cost;
-		total.contextTokens += entry.usage.contextTokens;
+		total.contextTokens = Math.max(total.contextTokens, entry.usage.contextTokens);
 		total.turns += entry.usage.turns;
 	}
 	return total;
@@ -331,7 +331,7 @@ async function runSingleTask(
 							currentResult.usage.cacheRead += usage.cacheRead || 0;
 							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
 							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
+							currentResult.usage.contextTokens = Math.max(currentResult.usage.contextTokens, usage.totalTokens || 0);
 						}
 						if (!currentResult.model && message.model) currentResult.model = message.model;
 						if (message.stopReason) currentResult.stopReason = message.stopReason;
