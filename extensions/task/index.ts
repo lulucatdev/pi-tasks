@@ -40,7 +40,7 @@ const MAX_RECENT_RUNS = 12;
 const TASK_UI_LIST_WINDOW = 10;
 const WORKER_SYSTEM_PROMPT = [
 	"You are an isolated task worker spawned by the current root agent.",
-	"Complete the assigned task using direct local inspection tools for file search, routing lookup, and code reading.",
+	"Complete the assigned task directly — you may read, write, edit, and run commands as needed.",
 	"Do not attempt to delegate work to other agents or tasks.",
 	"",
 	"IMPORTANT — Output file:",

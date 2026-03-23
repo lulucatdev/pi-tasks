@@ -10,12 +10,11 @@ Features:
 - `task` tool for launching one isolated task worker
 - `tasks` tool for launching one or more isolated task workers in parallel
 - Optional per-task `name` for human-readable identity
-- Automatic timestamped `id` (`YYYYMMDD-HHmmss-XXXX`) for every task run
+- Automatic timestamped id (`YYYYMMDDHHmmss-slug`) for every task, e.g. `20260323074203-wgpu-render-path`
 - No nested task creation inside child workers
 - Worker agents write their results to a pre-created `.pi/tasks/<id>.md` output file
 - The tool result returns the absolute path so the root agent can read it
-- Persistent tasks widget below the editor for active and recent runs
-- `/tasks-ui` dashboard for inspecting runs, reopening details, rerunning, copying prompts, pasting prompts, and aborting running tasks
+- `/tasks-ui` dashboard for inspecting runs, rerunning, copying prompts, pasting prompts, and aborting running tasks
 
 Quick examples:
 - `/tasks-start`
@@ -23,8 +22,8 @@ Quick examples:
 - `Use tasks to inspect the auth flow, trace the DB schema, and find the tests in parallel`
 - `Run tasks with names: find-schemas, trace-controller-flow, tests`
 - `/tasks-ui`
-- `/tasks-ui 042731`
-- `/tasks-ui abort 042731`
+- `/tasks-ui 20260323074203-auth-flow-check`
+- `/tasks-ui abort 20260323074203-auth-flow-check`
 
 `/tasks-ui` keys:
 - `Up/Down` or `j/k`: move selection

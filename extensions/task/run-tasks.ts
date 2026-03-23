@@ -251,12 +251,13 @@ export function collectTaskIds(runs: TaskRunRecord[]): Set<string> {
 }
 
 function slugify(text: string, maxLen = 48): string {
-  return text
+  const slug = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, maxLen)
     .replace(/-+$/, "");
+  return slug || "task";
 }
 
 export function generateTaskId(existingIds: Set<string>, label?: string): string {
