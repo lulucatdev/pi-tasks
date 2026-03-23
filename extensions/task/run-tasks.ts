@@ -379,7 +379,7 @@ export async function ensureOutputFile(outputPath: string): Promise<void> {
   await fs.writeFile(outputPath, "", "utf-8");
 }
 
-function buildResultText(details: TasksDetails): string {
+export function buildResultText(details: TasksDetails): string {
   const lines: string[] = [];
   const { summary } = details;
   const summaryParts: string[] = [];
@@ -390,11 +390,10 @@ function buildResultText(details: TasksDetails): string {
   lines.push(`TASKS complete: ${summaryParts.join(", ")}`);
   for (const result of details.results) {
     const identity = result.name ? `${result.name} · ${result.id}` : `task · ${result.id}`;
+    lines.push(`\n${identity} - ${result.status}:\nOutput: ${result.outputPath}`);
     if (result.status === "error" || result.status === "aborted") {
       const error = getResultError(result) || "Task failed.";
-      lines.push(`\n${identity} - ${result.status}:\n${error}`);
-    } else {
-      lines.push(`\n${identity} - ${result.status}:\nOutput: ${result.outputPath}`);
+      lines.push(`Error: ${error}`);
     }
   }
   return lines.join("\n");
