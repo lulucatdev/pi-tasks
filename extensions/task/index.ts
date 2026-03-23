@@ -34,6 +34,7 @@ import {
 
 const MAX_TASKS = 100;
 const MAX_CONCURRENCY = 20;
+const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per task
 const COLLAPSED_ITEM_COUNT = 8;
 const TASK_RUN_RECORD_TYPE = "tasks-run-record";
 const MAX_RECENT_RUNS = 12;
@@ -349,7 +350,13 @@ async function runSingleTask(
 				buffer += data.toString();
 				const lines = buffer.split("\n");
 				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
+				for (const line of lines) {
+					try {
+						processLine(line);
+					} catch {
+						// Don't let a single malformed event break the stream
+					}
+				}
 			});
 
 			proc.stderr.on("data", (data) => {
@@ -360,28 +367,40 @@ async function runSingleTask(
 
 			proc.on("close", (code) => {
 				procExited = true;
-				if (buffer.trim()) processLine(buffer);
-				// code is null when killed by signal — treat as error exit
-				// wasAborted is only set by our killProc, not by external signals
+				try {
+					if (buffer.trim()) processLine(buffer);
+				} catch {
+					// Don't let a parse error prevent resolve
+				}
 				resolve(code ?? 1);
 			});
 
 			proc.on("error", (error) => {
+				procExited = true;
 				currentResult.stderr += error.message;
 				resolve(1);
 			});
 
+			const killProc = (abort: boolean) => {
+				if (abort) wasAborted = true;
+				proc.kill("SIGTERM");
+				setTimeout(() => {
+					if (!procExited) proc.kill("SIGKILL");
+				}, 5000);
+			};
+
+			// Timeout: kill worker if it runs too long
+			const timeout = setTimeout(() => {
+				if (!procExited) {
+					currentResult.errorMessage = `Task timed out after ${TASK_TIMEOUT_MS / 1000}s`;
+					killProc(false);
+				}
+			}, TASK_TIMEOUT_MS);
+			proc.on("close", () => clearTimeout(timeout));
+
 			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						// proc.killed only means "signal was sent", not "process exited"
-						if (!procExited) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				if (signal.aborted) killProc(true);
+				else signal.addEventListener("abort", () => killProc(true), { once: true });
 			}
 		});
 
