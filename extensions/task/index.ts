@@ -34,7 +34,6 @@ import {
 
 const MAX_TASKS = 100;
 const MAX_CONCURRENCY = 20;
-const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per task
 const TASK_EXIT_GRACE_MS = 15 * 1000; // allow the child a short post-response window to exit cleanly
 const COLLAPSED_ITEM_COUNT = 8;
 const TASK_RUN_RECORD_TYPE = "tasks-run-record";
@@ -278,10 +277,8 @@ export function resolveTaskResultStatus(args: {
 	exitCode: number;
 	stopReason?: string;
 	sawTerminalAssistantMessage: boolean;
-	timedOutBeforeTerminal: boolean;
 }): TaskStatus {
 	if (args.wasAborted || args.stopReason === "aborted") return "aborted";
-	if (args.timedOutBeforeTerminal) return "error";
 	if (args.sawTerminalAssistantMessage) return args.stopReason === "error" ? "error" : "success";
 	if (args.exitCode === 0 && args.stopReason !== "error") return "success";
 	return "error";
@@ -311,7 +308,6 @@ async function runSingleTask(
 	};
 	let wasAborted = false;
 	let sawTerminalAssistantMessage = false;
-	let timedOutBeforeTerminal = false;
 
 	const emitUpdate = () => {
 		onUpdate?.({
@@ -433,19 +429,7 @@ async function runSingleTask(
 				resolve(1);
 			});
 
-			// Timeout: kill worker if it runs too long
-			const timeout = setTimeout(() => {
-				if (!procExited) {
-					if (!sawTerminalAssistantMessage) {
-						timedOutBeforeTerminal = true;
-						currentResult.errorMessage = `Task timed out after ${TASK_TIMEOUT_MS / 1000}s`;
-					}
-					killProc(false);
-				}
-			}, TASK_TIMEOUT_MS);
-			timeout.unref?.();
-			proc.on("close", () => clearTimeout(timeout));
-
+	
 			if (signal) {
 				if (signal.aborted) killProc(true);
 				else signal.addEventListener("abort", () => killProc(true), { once: true });
@@ -458,7 +442,6 @@ async function runSingleTask(
 			exitCode,
 			stopReason: currentResult.stopReason,
 			sawTerminalAssistantMessage,
-			timedOutBeforeTerminal,
 		});
 		emitUpdate();
 		return currentResult;

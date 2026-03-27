@@ -39,22 +39,9 @@ test("resolveTaskResultStatus keeps a completed worker successful even if the ch
     exitCode: 1,
     stopReason: "stop",
     sawTerminalAssistantMessage: true,
-    timedOutBeforeTerminal: false,
   });
 
   assert.equal(status, "success");
-});
-
-test("resolveTaskResultStatus still reports timeout before terminal output as an error", () => {
-  const status = resolveTaskResultStatus({
-    wasAborted: false,
-    exitCode: 1,
-    stopReason: "toolUse",
-    sawTerminalAssistantMessage: false,
-    timedOutBeforeTerminal: true,
-  });
-
-  assert.equal(status, "error");
 });
 
 test("buildResultText always reports the task output path, including failures", () => {
@@ -66,7 +53,7 @@ test("buildResultText always reports the task output path, including failures", 
         name: "error-task",
         outputPath: "/tmp/project/.pi/tasks/20260323231338-error-task.md",
         status: "error",
-        errorMessage: "Task timed out after 600s",
+        errorMessage: "Worker crashed unexpectedly",
       }),
       makeResult({
         id: "20260323231338-aborted-task",
@@ -90,6 +77,6 @@ test("buildResultText always reports the task output path, including failures", 
 
   assert.match(text, /TASKS complete: 1 success, 1 error, 1 aborted/);
   assert.match(text, /sample-task · 20260323231338-sample-task - success:\nOutput: \/tmp\/project\/.pi\/tasks\/20260323231338-sample-task\.md/);
-  assert.match(text, /error-task · 20260323231338-error-task - error:\nOutput: \/tmp\/project\/.pi\/tasks\/20260323231338-error-task\.md\nError: Task timed out after 600s/);
+  assert.match(text, /error-task · 20260323231338-error-task - error:\nOutput: \/tmp\/project\/.pi\/tasks\/20260323231338-error-task\.md\nError: Worker crashed unexpectedly/);
   assert.match(text, /aborted-task · 20260323231338-aborted-task - aborted:\nOutput: \/tmp\/project\/.pi\/tasks\/20260323231338-aborted-task\.md\nError: Task was aborted\./);
 });
