@@ -129,9 +129,14 @@ Inline `tasks({ tasks: [...] })` requires the model to stream the entire batch a
 - Unknown variables raise an error before any worker spawns.
 - Hard limits: `MAX_PLAN_ROWS=100`, `MAX_PLAN_PROMPT_TEMPLATE_BYTES=32000`, `MAX_PLAN_TOTAL_INPUT_BYTES=64000`.
 
-### Write-boundary parallelism note
+### Write-boundary parallelism
 
-When tasks declare `acceptance.allowedWritePaths` or `acceptance.forbiddenWritePaths` and rely on the default git-status snapshot for write attribution, the supervisor serializes those tasks to one at a time to avoid cross-task attribution. To run many write-boundary tasks in parallel, give each task a disjoint `cwd` (so each has its own git status snapshot) or omit the write-boundary contract for chapters that already have disjoint paths and rely on per-worker tool telemetry.
+Tasks with `acceptance.allowedWritePaths` (or `acceptance.forbiddenWritePaths`) run in parallel like everything else. The supervisor attributes file changes per task this way:
+
+- Each task captures a `git status` baseline right before it starts. After the task finishes, the supervisor diffs the project against that baseline and **filters the diff to files matching this task's `allowedWritePaths` zone**. Concurrent writes by other tasks (which target their own disjoint zones) never appear in this task's audit set.
+- Worker-side tool telemetry (`file_write_observed` events from the worker's own tool calls) is merged unfiltered. Out-of-zone writes show up in telemetry, so `acceptance.allowedWritePaths` and `acceptance.forbiddenWritePaths` violations are caught even when several tasks run in parallel.
+
+This gives true parallelism for chapter-style fan-out where each agent owns a disjoint `chapters/chN/**` zone. If two tasks declare overlapping `allowedWritePaths`, attribution becomes ambiguous (the same changed file can match both zones); declare disjoint zones or run those tasks with `concurrency: 1` if strict attribution matters.
 
 ## Acceptance Contracts
 

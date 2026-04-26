@@ -156,6 +156,27 @@ function hasWriteBoundary(task: NormalizedTaskSpec): boolean {
   return Boolean(task.acceptance?.allowedWritePaths?.length || task.acceptance?.forbiddenWritePaths?.length);
 }
 
+function compileGlobMatcher(pattern: string): RegExp {
+  const normalized = pattern.replace(/\\/g, "/");
+  const source = normalized
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "__DOUBLE_STAR__")
+    .replace(/\*/g, "[^/]*")
+    .replace(/__DOUBLE_STAR__/g, ".*");
+  return new RegExp(`^${source}$`);
+}
+
+function fileInAllowedZone(filePath: string, allowed: string[]): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  return allowed.some((pattern) => compileGlobMatcher(pattern).test(normalized));
+}
+
+function filterFilesByAllowedZone(files: string[], task: NormalizedTaskSpec): string[] {
+  const allowed = task.acceptance?.allowedWritePaths;
+  if (!allowed || allowed.length === 0) return files;
+  return files.filter((file) => fileInAllowedZone(file, allowed));
+}
+
 function normalizeToPosix(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
@@ -312,9 +333,14 @@ async function settleTask(input: {
   const workerLog = await readWorkerLog(paths.workerLogPath);
   const workerEvents = await readWorkerEvents(workerEventsPathForAttempt(paths.attemptDir)).catch(() => []);
   const telemetryWritePaths = observedWritePaths(workerEvents);
-  const changedFileAudit = input.deps.captureChangedFiles
+  const rawAudit = input.deps.captureChangedFiles
     ? await input.deps.captureChangedFiles(input.task).then((files) => ({ available: true, files }), () => ({ available: false, files: [] }))
     : diffStatusSnapshots(input.writeAuditBaseline, hasWriteBoundary(input.task) ? await gitStatusSnapshot(input.task.cwd) : null);
+  // Filter git-diff files to this task's allowed zone so parallel writes by other tasks
+  // (which target their own disjoint zones) don't pollute this task's audit set.
+  // Worker-side telemetry below still attributes any out-of-zone writes back to the worker.
+  const attributedAudit = { available: rawAudit.available, files: filterFilesByAllowedZone(rawAudit.files, input.task) };
+  const changedFileAudit = attributedAudit;
   for (const file of changedFileAudit.files) input.writeAuditChangedFiles.add(file);
   for (const file of telemetryWritePaths) input.writeAuditChangedFiles.add(file);
   const protocolKind = classifyProtocolFailure(reportResult.errors);
@@ -390,8 +416,11 @@ async function mapWithDynamicConcurrency<TInput, TOutput>(items: TInput[], getCo
 
 export async function executeSupervisedTasks(params: TasksToolParams, ctx: SupervisorContext, deps: SupervisorDependencies = {}): Promise<SupervisedTasksResult> {
   const normalized = normalizeTasksRun(params, ctx.cwd);
-  const writeAuditRequiresSerial = normalized.tasks.some(hasWriteBoundary) && !deps.captureChangedFiles;
-  const schedulingConcurrency = writeAuditRequiresSerial ? 1 : normalized.effectiveConcurrency;
+  // Tasks with write-boundary contracts run in parallel like everything else. Each task's
+  // git-status diff is filtered to that task's allowedWritePaths zone, so concurrent writes
+  // by other tasks targeting their own disjoint zones never appear in this task's audit set.
+  // Worker-side tool telemetry catches out-of-zone writes regardless of parallel state.
+  const schedulingConcurrency = normalized.effectiveConcurrency;
   const batch = await createBatch({
     rootCwd: ctx.cwd,
     toolName: ctx.toolName,

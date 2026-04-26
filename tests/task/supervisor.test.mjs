@@ -285,18 +285,57 @@ test("executeSupervisedTasks converts git status paths to task-cwd-relative writ
   assert.equal(result.tasks[0].acceptance.status, "passed");
 });
 
-test("executeSupervisedTasks serializes git write-boundary tasks to avoid cross-task attribution", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-serial-"));
+test("executeSupervisedTasks runs disjoint write-boundary tasks in parallel", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-parallel-"));
   await execFileAsync("git", ["init"], { cwd: root });
   const result = await executeSupervisedTasks({
     tasks: [
-      { name: "one", prompt: "one", acceptance: { allowedWritePaths: ["one.md"] } },
-      { name: "two", prompt: "two", acceptance: { allowedWritePaths: ["two.md"] } },
+      { name: "one", prompt: "one", acceptance: { allowedWritePaths: ["chapters/ch01/**"] } },
+      { name: "two", prompt: "two", acceptance: { allowedWritePaths: ["chapters/ch02/**"] } },
     ],
     concurrency: 2,
   }, { cwd: root, toolName: "tasks" }, { runAttempt: successAttempt });
 
-  assert.equal(result.batch.effectiveConcurrency, 1);
+  assert.equal(result.batch.effectiveConcurrency, 2);
+  assert.equal(result.batch.status, "success");
+});
+
+test("executeSupervisedTasks attributes git changes only to the task whose allowed zone matches", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-attribute-"));
+  await fs.mkdir(path.join(root, "chapters", "ch01"), { recursive: true });
+  await fs.mkdir(path.join(root, "chapters", "ch02"), { recursive: true });
+  await execFileAsync("git", ["init"], { cwd: root });
+  let order = 0;
+  const order01 = { started: -1, finished: -1 };
+  const order02 = { started: -1, finished: -1 };
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { name: "one", prompt: "one", acceptance: { allowedWritePaths: ["chapters/ch01/**"] } },
+      { name: "two", prompt: "two", acceptance: { allowedWritePaths: ["chapters/ch02/**"] } },
+    ],
+    concurrency: 2,
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      const tracker = input.task.id === "t001" ? order01 : order02;
+      tracker.started = order++;
+      await fs.writeFile(path.join(root, "chapters", input.task.id === "t001" ? "ch01" : "ch02", "out.tex"), "x", "utf-8");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const settled = await successAttempt(input);
+      tracker.finished = order++;
+      return settled;
+    },
+  });
+
+
+  assert.equal(result.batch.status, "success");
+  assert.ok(order01.started <= order02.started, "t001 should start before/at the same time as t002");
+  // Parallel: t001 should still be running when t002 starts.
+  assert.ok(order02.started < order01.finished, "t002 must start before t001 finishes when they run in parallel");
+  for (const task of result.tasks) {
+    for (const error of task.acceptance.errors) {
+      assert.doesNotMatch(error, /outside allowed write paths/, `${task.taskId} mis-attributed cross-task writes`);
+    }
+  }
 });
 
 test("executeSupervisedTasks detects forbidden writes across retry attempts", async () => {
