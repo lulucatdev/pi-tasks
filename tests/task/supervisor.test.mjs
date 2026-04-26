@@ -82,6 +82,32 @@ test("executeSupervisedTasks writes success batch/task/attempt artifacts", async
   assert.ok(events.some((event) => event.type === "batch_finished"));
 });
 
+test("executeSupervisedTasks emits live updates while tasks run", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-live-"));
+  const updates = [];
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { name: "one", prompt: "Do one" },
+      { name: "two", prompt: "Do two" },
+    ],
+    concurrency: 1,
+  }, { cwd: root, toolName: "tasks" }, {
+    onUpdate: (snapshot) => updates.push(snapshot),
+    runAttempt: async (input) => {
+      assert.ok(updates.some((snapshot) => snapshot.text.includes(`${input.task.id} ${input.task.name}: RUNNING`)));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.status, "success");
+  assert.ok(updates.length >= 4);
+  assert.match(updates[0].text, /TASKS running: 0\/2 done, 0 running, 2 queued/);
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("Inspect: /tasks-ui")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: RUNNING")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: SUCCESS")));
+});
+
 test("executeSupervisedTasks fails write-boundary acceptance when no audit source exists", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-audit-"));
   const result = await executeSupervisedTasks({

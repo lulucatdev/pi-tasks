@@ -53,6 +53,7 @@ export interface SupervisorDependencies {
 	captureChangedFiles?: (task: NormalizedTaskSpec) => Promise<string[]>;
 	sleep?: (ms: number) => Promise<void>;
 	random?: () => number;
+	onUpdate?: (snapshot: SupervisedTasksResult) => void;
 }
 
 export interface SupervisedTasksResult {
@@ -77,6 +78,51 @@ function summarizeTasks(tasks: TaskArtifact[]): BatchSummary {
     if (task.attempts.length > 1) summary.retried += 1;
   }
   return summary;
+}
+
+function countLifecycle(tasks: TaskArtifact[]): { done: number; queued: number; running: number; success: number; error: number; aborted: number } {
+  return {
+    done: tasks.filter((task) => task.finalStatus !== null).length,
+    queued: tasks.filter((task) => task.status === "queued").length,
+    running: tasks.filter((task) => task.status === "running").length,
+    success: tasks.filter((task) => task.finalStatus === "success").length,
+    error: tasks.filter((task) => task.finalStatus === "error").length,
+    aborted: tasks.filter((task) => task.finalStatus === "aborted").length,
+  };
+}
+
+function compactTaskLine(task: TaskArtifact): string {
+  const attempt = task.attempts.at(-1);
+  const state = (task.finalStatus ?? task.status).toUpperCase();
+  const attemptText = attempt ? ` attempt=${attempt.id}` : "";
+  const failureText = task.failureKind !== "none" ? ` failure=${task.failureKind}` : "";
+  return `- ${task.taskId} ${task.name}: ${state}${attemptText} acceptance=${task.acceptance.status}${failureText}`;
+}
+
+function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
+  const counts = countLifecycle(tasks);
+  return [
+    `TASKS running: ${counts.done}/${tasks.length} done, ${counts.running} running, ${counts.queued} queued`,
+    `Batch: ${batch.batchId}`,
+    `Artifacts: ${batch.batchDir}`,
+    `Inspect: /tasks-ui ${batch.batchId}`,
+    ...tasks.map(compactTaskLine),
+  ].join("\n");
+}
+
+async function readTaskArtifacts(batch: AuditBatchHandle): Promise<TaskArtifact[]> {
+  return Promise.all(batch.artifact.taskIds.map((taskId) => readJsonFile<TaskArtifact>(taskArtifactPath(batch, taskId))));
+}
+
+async function emitSupervisorUpdate(batch: AuditBatchHandle, deps: SupervisorDependencies, batchOverride?: BatchArtifact): Promise<void> {
+  if (!deps.onUpdate) return;
+  try {
+    const tasks = await readTaskArtifacts(batch);
+    const liveBatch = { ...(batchOverride ?? batch.artifact), summary: summarizeTasks(tasks) };
+    deps.onUpdate({ batch: liveBatch, tasks, text: buildLiveResultText(liveBatch, tasks) });
+  } catch {
+    // Live UI must never interfere with task supervision or artifact writes.
+  }
 }
 
 async function preflightTasks(tasks: NormalizedTaskSpec[]): Promise<void> {
@@ -190,6 +236,7 @@ async function settleTask(input: {
   taskArtifact.timeline.push({ at: now, state: "running", message: `Attempt ${input.attemptIndex} started` });
   await writeTaskArtifact(input.batch, taskArtifact);
   await appendBatchEvent(input.batch.eventsPath, { schemaVersion: 1, seq: input.nextSeq(), at: now, type: "attempt_started", batchId: input.batch.batchId, taskId: input.task.id, attemptId });
+  await emitSupervisorUpdate(input.batch, input.deps);
 
   let runtime: AttemptRuntimeResult;
   try {
@@ -268,6 +315,7 @@ async function settleTask(input: {
   };
   await writeTaskArtifact(input.batch, updated);
   await appendBatchEvent(input.batch.eventsPath, { schemaVersion: 1, seq: input.nextSeq(), at: finishedAt, type: "task_finished", batchId: input.batch.batchId, taskId: input.task.id, status: finalStatus, data: { failureKind } });
+  await emitSupervisorUpdate(input.batch, input.deps);
 
   return { artifact: updated };
 }
@@ -316,15 +364,24 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
   const retryPolicy = normalizeRetryPolicy(params.retry);
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const throttle = new ThrottleController(normalizeThrottlePolicy(params.throttle, schedulingConcurrency), schedulingConcurrency);
+  await emitSupervisorUpdate(batch, deps);
 
   const taskResults = await mapWithDynamicConcurrency(normalized.tasks, () => throttle.currentConcurrency, async (task) => {
     try {
-      if (ctx.signal?.aborted) return await abortQueuedTask({ batch, task, nextSeq, now: deps.now });
+      if (ctx.signal?.aborted) {
+        const aborted = await abortQueuedTask({ batch, task, nextSeq, now: deps.now });
+        await emitSupervisorUpdate(batch, deps);
+        return aborted;
+      }
       let latest: TaskArtifact | undefined;
       const writeAuditBaseline = hasWriteBoundary(task) && !deps.captureChangedFiles ? await gitStatusSnapshot(task.cwd) : null;
       const writeAuditChangedFiles = new Set<string>();
       for (let attemptIndex = 1; attemptIndex <= retryPolicy.maxAttempts; attemptIndex += 1) {
-        if (ctx.signal?.aborted && !latest) return await abortQueuedTask({ batch, task, nextSeq, now: deps.now });
+        if (ctx.signal?.aborted && !latest) {
+          const aborted = await abortQueuedTask({ batch, task, nextSeq, now: deps.now });
+          await emitSupervisorUpdate(batch, deps);
+          return aborted;
+        }
         if (ctx.signal?.aborted) break;
         const result = await settleTask({ batch, task, attemptIndex, nextSeq, writeAuditBaseline, writeAuditChangedFiles, ctx, deps: { ...deps, runAttempt } });
         latest = result.artifact;
@@ -364,6 +421,7 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
       };
       await writeTaskArtifact(batch, failed);
       await appendBatchEvent(batch.eventsPath, { schemaVersion: 1, seq: nextSeq(), at: now, type: "task_finished", batchId: batch.batchId, taskId: task.id, status: "error", message: failed.error ?? undefined });
+      await emitSupervisorUpdate(batch, deps);
       return failed;
     }
   });

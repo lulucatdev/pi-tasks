@@ -102,12 +102,18 @@ function modelId(ctx: ExtensionContext): string | undefined {
   return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 
-async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
+async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
   const result = await executeSupervisedTasks(params, {
     cwd: ctx.cwd,
     toolName,
     signal,
     model: modelId(ctx),
+  }, {
+    onUpdate: (snapshot) => onUpdate?.({
+      content: [{ type: "text", text: snapshot.text }],
+      details: snapshot,
+      isError: false,
+    }),
   });
   return {
     content: [{ type: "text", text: result.text }],
@@ -191,16 +197,17 @@ export default function taskExtension(pi: ExtensionAPI) {
       "The worker must submit a structured task report; natural-language completion claims are not enough.",
     ],
     parameters: TaskParams,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const { name, prompt, cwd, acceptance, metadata, concurrency, retry, throttle } = params as any;
-      return runTasks({ tasks: [{ name, prompt, cwd, acceptance, metadata }], concurrency, retry, throttle }, signal, ctx, "task");
+      return runTasks({ tasks: [{ name, prompt, cwd, acceptance, metadata }], concurrency, retry, throttle }, signal, onUpdate, ctx, "task");
     },
     renderCall(args, theme) {
       return new Text(`${theme.fg("toolTitle", theme.bold("task "))}${theme.fg("accent", String((args as any).name ?? "task"))}`, 0, 0);
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : buildResultText({ batchId: "unknown", batchDir: "unknown", status: "incomplete", total: 0, success: 0, error: 0, aborted: 0 });
-      return new Text(theme.fg(result.isError ? "error" : "success", text), 0, 0);
+      const color = text.startsWith("TASKS running") ? "warning" : result.isError ? "error" : "success";
+      return new Text(theme.fg(color, text), 0, 0);
     },
   });
 
@@ -215,8 +222,8 @@ export default function taskExtension(pi: ExtensionAPI) {
       "The root agent remains responsible for synthesis and for reading batch artifacts when needed.",
     ],
     parameters: TasksParams,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return runTasks(params as TasksToolParams, signal, ctx, "tasks");
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      return runTasks(params as TasksToolParams, signal, onUpdate, ctx, "tasks");
     },
     renderCall(args, theme) {
       const taskCount = Array.isArray((args as any).tasks) ? (args as any).tasks.length : 0;
@@ -224,7 +231,8 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "(no task result)";
-      return new Text(theme.fg(result.isError ? "error" : "success", text), 0, 0);
+      const color = text.startsWith("TASKS running") ? "warning" : result.isError ? "error" : "success";
+      return new Text(theme.fg(color, text), 0, 0);
     },
   });
 }
