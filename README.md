@@ -18,7 +18,7 @@ Do not maintain the live runtime copy by syncing from `pi-tools` anymore.
 Tasks Supervisor V3 treats each task as a supervised task agent attempt.
 
 - The root process owns planning, scheduling, retry classification, acceptance checks, and synthesis.
-- Fan-out is explicit: `tasks` must receive one `tasks[]` item per worker and rejects obvious single meta-task payloads.
+- Fan-out is explicit. The primary fan-out tool is `tasks_plan`: a compact `matrix + promptTemplate + acceptanceTemplate` payload that the extension expands locally into N supervised tasks. Inline `tasks` is a small-batch escape hatch (≤4 tasks, ≤8000 prompt bytes) and rejects oversized payloads with a pointer to `tasks_plan`.
 - Workers handle recoverable work-level errors themselves and submit `task-report.json`.
 - Parent retry is reserved for launch/session/provider transient failures that did not produce a valid report.
 - `success` requires runtime success, valid worker report, `completed` status, acceptance pass, and finalized audit artifacts.
@@ -31,6 +31,7 @@ Batch artifacts live under:
   batch.json
   events.jsonl
   summary.md
+  plan.json                  # only present when tasks_plan was used
   tasks/<taskId>.json
   attempts/<taskId>/attempt-N/
 ```

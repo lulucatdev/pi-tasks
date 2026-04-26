@@ -78,16 +78,60 @@ type TaskSpecInput = {
 };
 
 type TasksToolParams = {
-  tasks: TaskSpecInput[];
+  tasks: TaskSpecInput[];                  // ≤ MAX_INLINE_TASKS=4 inline tasks
   concurrency?: number;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
   audit?: { level?: "basic" | "full" };
   acceptanceDefaults?: AcceptanceContract;
 };
+
+type TasksPlanRow = {
+  id: string;
+  name?: string;
+  cwd?: string;
+  vars?: Record<string, string | string[]>;
+};
+
+type TasksPlanInput = {
+  batchName: string;
+  concurrency?: number;
+  matrix: TasksPlanRow[];
+  promptTemplate: string;
+  nameTemplate?: string;
+  cwdTemplate?: string;
+  acceptanceTemplate?: AcceptanceContract;
+  metadataTemplate?: Record<string, string>;
+  retry?: ParentRetryPolicy;
+  throttle?: ThrottlePolicy;
+  audit?: { level?: "basic" | "full" };
+  acceptanceDefaults?: AcceptanceContract;
+  synthesis?: { mode?: "parent" | "report-only"; instructions?: string };
+};
 ```
 
 `task` is a single-task convenience wrapper over `tasks`.
+
+`tasks` is the small-batch escape hatch (≤ `MAX_INLINE_TASKS=4` tasks, ≤ `MAX_INLINE_PROMPT_BYTES=8000` prompt bytes). Oversized inline payloads fail fast with a message pointing to `tasks_plan`.
+
+`tasks_plan` is the primary fan-out tool. The extension validates the input, expands the matrix locally into N full `TaskSpecInput`s, and calls `executeSupervisedTasks` with the same artifact/audit/acceptance/retry/throttle behavior as `tasks`. It additionally writes `plan.json` next to `batch.json` recording the matrix, templates, expanded task names, and synthesis instructions.
+
+### Why `tasks_plan` exists
+
+Inline `tasks({ tasks: [...] })` requires the model to stream the entire batch as one tool-call argument. With many long per-task prompts, that argument can be tens of KB and the model/provider can be `terminated` mid-stream. When that happens, `execute()` is never called: there is no `TASKS starting`, no `.pi/tasks/<batchId>`, no heartbeat, and no logs. `tasks_plan` keeps the streamed argument tiny (one shared `promptTemplate` + N short `matrix` rows) so the supervisor reaches `execute()` quickly and produces visible artifacts.
+
+### `tasks_plan` template rules
+
+- `{{key}}` lookups resolve in this order: row.id, row.name, row.cwd, row.vars.
+- In a string field, an array value joins with `\n`.
+- In an array string field (e.g. `acceptanceTemplate.allowedWritePaths`), an entry that is exactly `{{key}}` and whose row value is an array splats into multiple list entries.
+- `requiredPaths` accepts both bare strings and `PathCheck` objects; `path`, `requiredRegex`, and `forbiddenRegex` are all template-substituted.
+- Unknown variables raise an error before any worker spawns.
+- Hard limits: `MAX_PLAN_ROWS=100`, `MAX_PLAN_PROMPT_TEMPLATE_BYTES=32000`, `MAX_PLAN_TOTAL_INPUT_BYTES=64000`.
+
+### Write-boundary parallelism note
+
+When tasks declare `acceptance.allowedWritePaths` or `acceptance.forbiddenWritePaths` and rely on the default git-status snapshot for write attribution, the supervisor serializes those tasks to one at a time to avoid cross-task attribution. To run many write-boundary tasks in parallel, give each task a disjoint `cwd` (so each has its own git status snapshot) or omit the write-boundary contract for chapters that already have disjoint paths and rely on per-worker tool telemetry.
 
 ## Acceptance Contracts
 

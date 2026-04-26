@@ -5,6 +5,8 @@ import type { AcceptanceContract, NormalizedTaskSpec, TaskSpecInput, TasksToolPa
 export const DEFAULT_MAX_TASKS = 100;
 export const DEFAULT_CONCURRENCY = 8;
 export const HARD_MAX_CONCURRENCY = 64;
+export const MAX_INLINE_TASKS = 4;
+export const MAX_INLINE_PROMPT_BYTES = 8_000;
 
 export interface NormalizedTasksRun {
   tasks: NormalizedTaskSpec[];
@@ -91,8 +93,32 @@ export function validateTasksFanoutUsage(params: TasksToolParams): void {
   throw new Error([
     `tasks received 1 task${expected ? ` but the request appears to need ${expected} supervised agents` : " but the request appears to need multiple supervised agents"}.`,
     "Do not create one coordinator/meta-task that launches or describes other agents.",
-    "Call tasks with one item per worker in the tasks array, then set concurrency to the desired parallelism.",
+    "For repeated/templated fan-out, call tasks_plan with a small matrix and a promptTemplate.",
     "Use the single task tool only when exactly one worker should run.",
+  ].join(" "));
+}
+
+export interface InlineTasksLimits {
+  maxTasks: number;
+  maxPromptBytes: number;
+}
+
+export function inlineTasksByteSize(params: TasksToolParams): number {
+  let total = 0;
+  for (const task of params.tasks) {
+    total += Buffer.byteLength(task.prompt ?? "", "utf-8");
+    total += Buffer.byteLength(task.name ?? "", "utf-8");
+  }
+  return total;
+}
+
+export function enforceInlineTasksLimit(params: TasksToolParams, limits: InlineTasksLimits = { maxTasks: MAX_INLINE_TASKS, maxPromptBytes: MAX_INLINE_PROMPT_BYTES }): void {
+  const totalBytes = inlineTasksByteSize(params);
+  if (params.tasks.length <= limits.maxTasks && totalBytes <= limits.maxPromptBytes) return;
+  throw new Error([
+    `tasks rejected: ${params.tasks.length} task${params.tasks.length === 1 ? "" : "s"} (limit ${limits.maxTasks}), ${totalBytes} prompt bytes (limit ${limits.maxPromptBytes}).`,
+    "Inline tasks() is reserved for tiny ad-hoc batches. For repeated or templated fan-out (every chapter, every report, every file), use tasks_plan with a small matrix + promptTemplate so the model never has to stream a huge tool-call argument.",
+    "Example: tasks_plan({ batchName: \"...\", concurrency: N, matrix: [{ id, vars }, ...], promptTemplate: \"...\", acceptanceTemplate: { ... } }).",
   ].join(" "));
 }
 

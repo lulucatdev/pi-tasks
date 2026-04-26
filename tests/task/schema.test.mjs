@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildResultText, normalizeTasksRun, validateTasksFanoutUsage, validateTasksToolParams } from "../../extensions/task/run-tasks.ts";
+import {
+  buildResultText,
+  enforceInlineTasksLimit,
+  inlineTasksByteSize,
+  MAX_INLINE_PROMPT_BYTES,
+  MAX_INLINE_TASKS,
+  normalizeTasksRun,
+  validateTasksFanoutUsage,
+  validateTasksToolParams,
+} from "../../extensions/task/run-tasks.ts";
 
 test("validateTasksToolParams accepts new prompt-based task specs", () => {
   const params = { tasks: [{ name: "inspect", prompt: "Inspect the code", cwd: "." }], concurrency: 4 };
@@ -15,14 +24,14 @@ test("validateTasksToolParams rejects old task field, empty names, and unsafe ta
   assert.throws(() => validateTasksToolParams({ tasks: [{ id: "nested/task", name: "unsafe", prompt: "x" }] }), /path traversal/);
 });
 
-test("validateTasksFanoutUsage rejects one meta-task when fan-out was intended", () => {
+test("validateTasksFanoutUsage rejects one meta-task when fan-out was intended and points to tasks_plan", () => {
   assert.throws(() => validateTasksFanoutUsage({
     concurrency: 19,
     tasks: [{ name: "fix all chapters", prompt: "发起 19 个并行 agents。每个都会读对应 Oracle 报告并只修本章局部正文问题。" }],
   }), /received 1 task.*19 supervised agents/);
   assert.throws(() => validateTasksFanoutUsage({
     tasks: [{ name: "parallel repair", prompt: "Launch parallel workers, each one reads a corresponding report and writes a receipt." }],
-  }), /one item per worker/);
+  }), /tasks_plan/);
   assert.doesNotThrow(() => validateTasksFanoutUsage({
     concurrency: 1,
     tasks: [{ name: "single repair", prompt: "Fix this one chapter only." }],
@@ -46,6 +55,31 @@ test("normalizeTasksRun creates batch-local ids, resolves cwd, merges acceptance
   assert.deepEqual(normalized.tasks[0].acceptance.requiredOutputRegex, ["done"]);
   assert.deepEqual(normalized.tasks[0].acceptance.forbiddenOutputRegex, ["TODO"]);
   assert.deepEqual(normalized.tasks[0].acceptance.allowedWritePaths, ["shared/**", "one.md"]);
+});
+
+test("enforceInlineTasksLimit allows small batches", () => {
+  assert.doesNotThrow(() => enforceInlineTasksLimit({
+    tasks: [
+      { name: "a", prompt: "do a" },
+      { name: "b", prompt: "do b" },
+    ],
+  }));
+});
+
+test("enforceInlineTasksLimit rejects more than MAX_INLINE_TASKS items and points to tasks_plan", () => {
+  const tasks = Array.from({ length: MAX_INLINE_TASKS + 1 }, (_v, i) => ({ name: `t${i}`, prompt: "do it" }));
+  assert.throws(() => enforceInlineTasksLimit({ tasks }), /tasks_plan/);
+  assert.throws(() => enforceInlineTasksLimit({ tasks }), /limit \d+/);
+});
+
+test("enforceInlineTasksLimit rejects oversized prompt payloads and points to tasks_plan", () => {
+  const big = "x".repeat(MAX_INLINE_PROMPT_BYTES + 100);
+  assert.throws(() => enforceInlineTasksLimit({ tasks: [{ name: "huge", prompt: big }] }), /tasks_plan/);
+});
+
+test("inlineTasksByteSize counts task name and prompt utf-8 bytes", () => {
+  const size = inlineTasksByteSize({ tasks: [{ name: "α", prompt: "β" }] });
+  assert.equal(size, Buffer.byteLength("α", "utf-8") + Buffer.byteLength("β", "utf-8"));
 });
 
 test("buildResultText points to batch artifacts", () => {
