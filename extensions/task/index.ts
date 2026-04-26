@@ -10,7 +10,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { registerTasksStartCommand } from "./commands.ts";
 import { buildRerunParamsFromBatchDir, isRerunFilter, RERUN_FILTERS } from "./rerun.ts";
-import { buildResultText } from "./run-tasks.ts";
+import { buildResultText, validateTasksFanoutUsage } from "./run-tasks.ts";
 import { executeSupervisedTasks } from "./supervisor.ts";
 import { listBatches, loadBatchDetail, renderAttemptDetailLines, renderBatchDetailLines, renderBatchListLines, renderTaskDetailLines, renderTasksUiHelpLines, resolveBatchDir } from "./task-ui.ts";
 import { registerTaskReportTool } from "./task-report-tool.ts";
@@ -103,6 +103,7 @@ function modelId(ctx: ExtensionContext): string | undefined {
 }
 
 async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
+  if (toolName === "tasks") validateTasksFanoutUsage(params);
   const result = await executeSupervisedTasks(params, {
     cwd: ctx.cwd,
     toolName,
@@ -193,6 +194,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     promptSnippet: "Launch one supervised task agent with a prompt, name, and optional acceptance contract.",
     promptGuidelines: [
       "Use task when exactly one isolated supervised task agent is useful.",
+      "Do not use task to fan out multiple agents; use tasks with one tasks[] item per worker instead.",
       "Provide a clear name, concrete prompt, expected deliverables, and acceptance criteria when possible.",
       "The worker must submit a structured task report; natural-language completion claims are not enough.",
     ],
@@ -218,6 +220,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     promptSnippet: "Launch supervised task agents in one audited batch.",
     promptGuidelines: [
       "Use tasks only when the work can be split into independent leaf task agents.",
+      "For N agents, pass exactly N items in tasks[]; never create one coordinator/meta-task that says it will launch or manage N agents.",
       "Give every task a clear name and prompt; use acceptance contracts for required files, regexes, and write boundaries.",
       "The root agent remains responsible for synthesis and for reading batch artifacts when needed.",
     ],

@@ -5,7 +5,7 @@ Root-only supervised task agents for pi.
 ## Tools
 
 - `task` launches one supervised task agent.
-- `tasks` launches one or more supervised task agents with configurable concurrency, retry, throttling, audit, and acceptance contracts.
+- `tasks` launches multiple supervised task agents with configurable concurrency, retry, throttling, audit, and acceptance contracts. It rejects one-task meta-fanout payloads; use one `tasks[]` item per worker.
 - `/tasks-start` inserts task-oriented guidance into the editor without triggering an LLM turn.
 - `/tasks-ui` reads batch artifacts, shows failure triage, opens task/attempt details, and prepares rerun payloads.
 

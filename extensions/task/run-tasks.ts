@@ -57,6 +57,45 @@ export function validateTasksToolParams(params: unknown, maxTasks = DEFAULT_MAX_
   }
 }
 
+function requestedFanoutCount(text: string): number | undefined {
+  const patterns = [
+    /(?:launch|start|run|spawn|fan[- ]?out|发起|启动|运行)\D{0,30}(\d{1,3})\D{0,20}(?:agents?|workers?|tasks?|个\s*(?:并行\s*)?(?:agents?|agent|workers?|worker|任务))/i,
+    /(\d{1,3})\s*(?:个\s*)?(?:并行\s*)?(?:agents?|agent|workers?|worker|任务|tasks?)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const count = Number(match[1]);
+    if (Number.isInteger(count) && count > 1) return count;
+  }
+  return undefined;
+}
+
+function looksLikeMetaFanoutTask(task: TaskSpecInput): { matched: boolean; requestedCount?: number } {
+  const text = `${task.name}\n${task.prompt}`;
+  const requestedCount = requestedFanoutCount(text);
+  if (requestedCount) return { matched: true, requestedCount };
+  const hasAgentTerm = /\b(?:agents?|workers?|subtasks?)\b|并行|分工|分别|每个|每章|各章/i.test(text);
+  const hasFanoutTerm = /\b(?:parallel|concurrent|fan[- ]?out|spawn|launch)\b|并行|发起|启动/i.test(text);
+  return { matched: hasAgentTerm && hasFanoutTerm };
+}
+
+export function validateTasksFanoutUsage(params: TasksToolParams): void {
+  validateTasksToolParams(params);
+  if (params.tasks.length !== 1) return;
+  const task = params.tasks[0]!;
+  const meta = looksLikeMetaFanoutTask(task);
+  const requestedConcurrency = params.concurrency ?? DEFAULT_CONCURRENCY;
+  if (!meta.matched && requestedConcurrency <= 1) return;
+  const expected = meta.requestedCount ?? (requestedConcurrency > 1 ? requestedConcurrency : undefined);
+  throw new Error([
+    `tasks received 1 task${expected ? ` but the request appears to need ${expected} supervised agents` : " but the request appears to need multiple supervised agents"}.`,
+    "Do not create one coordinator/meta-task that launches or describes other agents.",
+    "Call tasks with one item per worker in the tasks array, then set concurrency to the desired parallelism.",
+    "Use the single task tool only when exactly one worker should run.",
+  ].join(" "));
+}
+
 export function normalizeTasksRun(params: TasksToolParams, defaultCwd: string, maxConcurrency = HARD_MAX_CONCURRENCY): NormalizedTasksRun {
   validateTasksToolParams(params);
   const generatedIds = generateTaskIds(params.tasks.length);
