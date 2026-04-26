@@ -158,6 +158,8 @@ Supported artifact navigation commands:
 
 Rerun payloads are constructed from artifacts and preserve `parentBatchId` / `rerunOfTaskIds`.
 
+Live tool updates emit compact batch progress plus recent per-task thinking/tool activity derived from worker `stdout.jsonl` events. The same activity is persisted on each `tasks/<taskId>.json` artifact and shown by task/attempt detail views.
+
 ## Phase 3 Direction
 
 The file protocol remains the fallback. A future child-only `task_report` tool and worker event channel provide stronger live telemetry:

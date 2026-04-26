@@ -107,6 +107,17 @@ export interface RetryDecision {
   delayMs?: number;
 }
 
+export type TaskActivityKind = "thinking" | "tool";
+
+export interface TaskActivityItem {
+  at: string;
+  taskId: string;
+  attemptId: string;
+  kind: TaskActivityKind;
+  label: string;
+  detail?: string;
+}
+
 export interface TaskAttemptRecord {
   id: string;
   index: number;
@@ -220,6 +231,7 @@ export interface TaskArtifact {
   startedAt: string | null;
   finishedAt: string | null;
   timeline: Array<{ at: string; state: TaskLifecycleStatus; message?: string }>;
+  activity: TaskActivityItem[];
   warnings: string[];
   error: string | null;
   metadata?: Record<string, string>;

@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isDiscoverableBatch, readJsonFile } from "./audit-log.ts";
+import { renderActivityLine } from "./thinking-steps.ts";
 import type { BatchArtifact, InternalRetryRecord, TaskArtifact, TaskAttemptRecord, TaskDeliverable, TaskEvidence } from "./types.ts";
 
 export interface BatchListItem {
@@ -252,6 +253,12 @@ export function renderTaskDetailLines(detail: BatchDetail, taskId: string): stri
   lines.push("", "Timeline:");
   for (const item of task.timeline) lines.push(`- ${item.at} ${item.state}${item.message ? ` - ${item.message}` : ""}`);
 
+  const activity = task.activity ?? [];
+  if (activity.length) {
+    lines.push("", "Thinking/activity:");
+    for (const item of activity.slice(-20)) lines.push(`- ${item.at} ${item.attemptId} ${renderActivityLine(item)}`);
+  }
+
   if (report) {
     lines.push("", "Report details:");
     lines.push(...renderDeliverables(report.deliverables));
@@ -301,6 +308,12 @@ export function renderAttemptDetailLines(detail: BatchDetail, taskId: string, at
   const malformed = (runtime as { stdoutMalformedLines?: number }).stdoutMalformedLines;
   lines.push(`Malformed stdout lines: ${malformed ?? 0}`);
 
+  const activity = (task.activity ?? []).filter((item) => item.attemptId === attempt.id);
+  if (activity.length) {
+    lines.push("", "Thinking/activity:");
+    for (const item of activity.slice(-30)) lines.push(`- ${item.at} ${renderActivityLine(item)}`);
+  }
+
   lines.push("", "Artifacts:");
   for (const line of [
     renderPath("attempt dir", attempt.attemptDir),
@@ -337,6 +350,8 @@ export function renderLiveDashboardLines(state: LiveDashboardState): string[] {
   for (const task of state.tasks) {
     const last = task.attempts.at(-1);
     lines.push(`- ${task.taskId} ${task.name}: ${task.status} attempts=${task.attempts.length}${last ? ` last=${last.id}` : ""} acceptance=${task.acceptance.status}`);
+    const activity = (task.activity ?? []).at(-1);
+    if (activity) lines.push(`  ${renderActivityLine(activity)}`);
   }
   if (state.abortableTaskIds?.length) lines.push(`Abortable: ${state.abortableTaskIds.join(", ")}`);
   return lines;

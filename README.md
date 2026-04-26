@@ -50,7 +50,7 @@ Use `/tasks-ui` to navigate persisted artifacts:
 /tasks-ui rerun selected <batchId> <taskId> [taskId...]
 ```
 
-The UI is artifact-first: batch detail groups failures, task detail shows acceptance/report state, attempt detail shows runtime fields and artifact paths, and rerun preparation preserves parent batch provenance.
+The UI is artifact-first: batch detail groups failures, task detail shows acceptance/report state, attempt detail shows runtime fields, thinking/tool activity, and artifact paths, and rerun preparation preserves parent batch provenance. Live `task` / `tasks` updates also show recent per-task thinking/activity lines while workers run.
 
 ## Load it in pi
 

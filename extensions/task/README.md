@@ -95,7 +95,7 @@ tasks({
 /tasks-ui rerun selected <batchId|batchDir> <taskId> [taskId...]
 ```
 
-Batch detail shows failed tasks first with reason, retryability, and artifact inspection commands. Task detail shows prompt/cwd, timeline, acceptance/report state, deliverables, evidence, and latest attempt paths. Attempt detail shows runtime status, exit/stop reason, stderr tail, malformed stdout count, and every attempt artifact path.
+Batch detail shows failed tasks first with reason, retryability, and artifact inspection commands. Task detail shows prompt/cwd, timeline, acceptance/report state, deliverables, evidence, recent thinking/tool activity, and latest attempt paths. Attempt detail shows runtime status, exit/stop reason, stderr tail, malformed stdout count, thinking/tool activity, and every attempt artifact path. Live `task` / `tasks` updates show the latest per-task thinking/activity lines while workers run.
 
 ## Retry boundary
 

@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EventEmitter } from "node:events";
 import type { AttemptPaths } from "./audit-log.ts";
-import type { FailureKind, NormalizedTaskSpec, RuntimeOutcome, RuntimeStatus, TaskAttemptRecord } from "./types.ts";
+import { createWorkerActivityState, extractWorkerActivity } from "./thinking-steps.ts";
+import type { FailureKind, NormalizedTaskSpec, RuntimeOutcome, RuntimeStatus, TaskActivityItem, TaskAttemptRecord } from "./types.ts";
 import { workerEventsPathForAttempt } from "./worker-events.ts";
 import { buildWorkerPrompt, buildWorkerSystemPrompt } from "./worker-protocol.ts";
 
@@ -46,6 +47,7 @@ export interface RunWorkerAttemptInput {
   env?: NodeJS.ProcessEnv;
   abortKillDelayMs?: number;
   terminalExitGraceMs?: number;
+  onActivity?: (activity: TaskActivityItem) => void | Promise<void>;
 }
 
 function isTerminalAssistantEvent(event: unknown): { terminal: boolean; stopReason?: string; errorMessage?: string } {
@@ -77,6 +79,8 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
   let scheduleTerminalExitGuard = () => {};
   let stdoutWriteQueue = Promise.resolve();
   let stderrWriteQueue = Promise.resolve();
+  let activityQueue = Promise.resolve();
+  const activityState = createWorkerActivityState();
 
   const queueAppend = (filePath: string, text: string, stream: "stdout" | "stderr") => {
     const append = () => fs.appendFile(filePath, text, "utf-8").catch((error) => {
@@ -84,6 +88,12 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     });
     if (stream === "stdout") stdoutWriteQueue = stdoutWriteQueue.then(append, append);
     else stderrWriteQueue = stderrWriteQueue.then(append, append);
+  };
+
+  const queueActivity = (activity: TaskActivityItem) => {
+    if (!input.onActivity) return;
+    const emit = () => Promise.resolve(input.onActivity?.(activity)).catch(() => undefined);
+    activityQueue = activityQueue.then(emit, emit);
   };
 
   await fs.mkdir(input.paths.attemptDir, { recursive: true });
@@ -132,6 +142,8 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     if (!line.trim()) return;
     try {
       const event = JSON.parse(line);
+      const workerActivity = extractWorkerActivity(event, activityState, { taskId: input.task.id, attemptId: input.attemptId });
+      if (workerActivity) queueActivity(workerActivity);
       const terminal = isTerminalAssistantEvent(event);
       if (terminal.terminal) {
         sawTerminalAssistantMessage = true;
@@ -216,7 +228,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     });
   });
 
-  await Promise.all([stdoutWriteQueue, stderrWriteQueue]);
+  await Promise.all([stdoutWriteQueue, stderrWriteQueue, activityQueue]);
 
   const finishedAt = new Date().toISOString();
   const status: RuntimeStatus = wasAborted || stopReason === "aborted" ? "aborted" : stopReason === "error" || errorMessage ? "error" : sawTerminalAssistantMessage && exitCode === 0 ? "success" : exitCode === 0 ? "success" : "error";

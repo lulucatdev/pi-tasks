@@ -157,6 +157,7 @@ export function buildQueuedTaskArtifact(input: {
     startedAt: null,
     finishedAt: null,
     timeline: [{ at: input.queuedAt, state: "queued" }],
+    activity: [],
     warnings: [],
     error: null,
     metadata: input.task.metadata,

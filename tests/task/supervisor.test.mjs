@@ -95,6 +95,7 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
     onUpdate: (snapshot) => updates.push(snapshot),
     runAttempt: async (input) => {
       assert.ok(updates.some((snapshot) => snapshot.text.includes(`${input.task.id} ${input.task.name}: RUNNING`)));
+      await input.onActivity?.({ at: "2026-04-26T00:00:00.500Z", taskId: input.task.id, attemptId: input.attemptId, kind: "thinking", label: `Inspect ${input.task.name}` });
       await new Promise((resolve) => setTimeout(resolve, 5));
       return successAttempt(input);
     },
@@ -105,7 +106,12 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
   assert.match(updates[0].text, /TASKS running: 0\/2 done, 0 running, 2 queued/);
   assert.ok(updates.some((snapshot) => snapshot.text.includes("Inspect: /tasks-ui")));
   assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: RUNNING")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("thinking: Inspect one")));
   assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: SUCCESS")));
+  const task = await readJsonFile(path.join(result.batch.batchDir, "tasks", "t001.json"));
+  assert.equal(task.activity[0].label, "Inspect one");
+  const events = await readJsonlTolerant(path.join(result.batch.batchDir, "events.jsonl"));
+  assert.ok(events.some((event) => event.type === "task_activity" && event.data?.label === "Inspect one"));
 });
 
 test("executeSupervisedTasks fails write-boundary acceptance when no audit source exists", async () => {

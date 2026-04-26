@@ -18,6 +18,7 @@ import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } f
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { buildResultText, normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
+import { renderActivityLine } from "./thinking-steps.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   deriveTaskFinalStatus,
@@ -28,6 +29,7 @@ import {
   type FailureKind,
   type NormalizedTaskSpec,
   type RuntimeOutcome,
+  type TaskActivityItem,
   type TaskArtifact,
   type TaskAttemptRecord,
   type TasksToolParams,
@@ -91,12 +93,15 @@ function countLifecycle(tasks: TaskArtifact[]): { done: number; queued: number; 
   };
 }
 
-function compactTaskLine(task: TaskArtifact): string {
+function compactTaskLines(task: TaskArtifact): string[] {
   const attempt = task.attempts.at(-1);
   const state = (task.finalStatus ?? task.status).toUpperCase();
   const attemptText = attempt ? ` attempt=${attempt.id}` : "";
   const failureText = task.failureKind !== "none" ? ` failure=${task.failureKind}` : "";
-  return `- ${task.taskId} ${task.name}: ${state}${attemptText} acceptance=${task.acceptance.status}${failureText}`;
+  const lines = [`- ${task.taskId} ${task.name}: ${state}${attemptText} acceptance=${task.acceptance.status}${failureText}`];
+  const recentActivity = (task.activity ?? []).slice(-2);
+  for (const item of recentActivity) lines.push(`  ${renderActivityLine(item)}`);
+  return lines;
 }
 
 function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
@@ -106,7 +111,7 @@ function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): strin
     `Batch: ${batch.batchId}`,
     `Artifacts: ${batch.batchDir}`,
     `Inspect: /tasks-ui ${batch.batchId}`,
-    ...tasks.map(compactTaskLine),
+    ...tasks.flatMap(compactTaskLines),
   ].join("\n");
 }
 
@@ -194,6 +199,28 @@ function pickFailureKind(runtimeDecision: ReturnType<typeof classifyAndDecide>, 
   return finalStatus === "success" ? "none" : "worker_incomplete";
 }
 
+async function recordTaskActivity(input: {
+  batch: AuditBatchHandle;
+  activity: TaskActivityItem;
+  nextSeq: () => number;
+  deps: SupervisorDependencies;
+}): Promise<void> {
+  const existing = await readJsonFile<TaskArtifact>(taskArtifactPath(input.batch, input.activity.taskId));
+  const activity = [...(existing.activity ?? []), input.activity].slice(-100);
+  await writeTaskArtifact(input.batch, { ...existing, activity });
+  await appendBatchEvent(input.batch.eventsPath, {
+    schemaVersion: 1,
+    seq: input.nextSeq(),
+    at: input.activity.at,
+    type: "task_activity",
+    batchId: input.batch.batchId,
+    taskId: input.activity.taskId,
+    attemptId: input.activity.attemptId,
+    data: { kind: input.activity.kind, label: input.activity.label, detail: input.activity.detail },
+  });
+  await emitSupervisorUpdate(input.batch, input.deps);
+}
+
 async function abortQueuedTask(input: {
   batch: AuditBatchHandle;
   task: NormalizedTaskSpec;
@@ -248,6 +275,7 @@ async function settleTask(input: {
       signal: input.ctx.signal,
       fallbackModel: input.ctx.model,
       fallbackThinking: input.ctx.thinking,
+      onActivity: (activity) => recordTaskActivity({ batch: input.batch, activity, nextSeq: input.nextSeq, deps: input.deps }),
     });
   } catch (error) {
     const finishedAt = input.deps.now?.() ?? new Date().toISOString();
@@ -299,18 +327,19 @@ async function settleTask(input: {
 
   const finishedAt = input.deps.now?.() ?? new Date().toISOString();
   const terminalState = finalStatus;
+  const latestTaskArtifact = await readJsonFile<TaskArtifact>(taskArtifactPath(input.batch, input.task.id));
   const updated: TaskArtifact = {
-    ...taskArtifact,
+    ...latestTaskArtifact,
     status: terminalState,
     finalStatus,
     failureKind,
     retryability: retryDecision.retryability,
     acceptance,
     workerReport,
-    attempts: [...taskArtifact.attempts, attempt],
+    attempts: [...latestTaskArtifact.attempts, attempt],
     finishedAt,
-    timeline: [...taskArtifact.timeline, { at: finishedAt, state: terminalState, message: `Task finished with ${finalStatus}` }],
-    warnings: [...taskArtifact.warnings, ...workerReport.warnings, ...acceptance.warnings],
+    timeline: [...latestTaskArtifact.timeline, { at: finishedAt, state: terminalState, message: `Task finished with ${finalStatus}` }],
+    warnings: [...latestTaskArtifact.warnings, ...workerReport.warnings, ...acceptance.warnings],
     error: finalStatus === "success" ? null : attempt.error ?? workerReport.errors[0] ?? acceptance.errors[0] ?? "Task failed.",
   };
   await writeTaskArtifact(input.batch, updated);
