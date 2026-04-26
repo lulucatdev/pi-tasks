@@ -114,6 +114,35 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
   assert.ok(events.some((event) => event.type === "task_activity" && event.data?.label === "Inspect one"));
 });
 
+test("executeSupervisedTasks creates batch artifacts before cwd launch failures", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-invalid-cwd-"));
+  const updates = [];
+  const result = await executeSupervisedTasks({
+    tasks: [{ name: "bad-cwd", prompt: "Run there", cwd: "missing-dir" }],
+    concurrency: 1,
+  }, { cwd: root, toolName: "tasks" }, {
+    onUpdate: (snapshot) => updates.push(snapshot),
+    runAttempt: async (input) => ({
+      attemptId: input.attemptId,
+      taskId: input.task.id,
+      status: "error",
+      exitCode: 1,
+      sawTerminalAssistantMessage: false,
+      stderrTail: "spawn cwd ENOENT",
+      stdoutMalformedLines: 0,
+      failureKind: "launch_error",
+      error: "spawn cwd ENOENT",
+      startedAt: "2026-04-26T00:00:00.000Z",
+      finishedAt: "2026-04-26T00:00:01.000Z",
+    }),
+  });
+
+  assert.equal(result.batch.status, "error");
+  assert.match(updates[0].text, /TASKS running: 0\/1 done, 0 running, 1 queued/);
+  assert.equal(await fs.stat(path.join(result.batch.batchDir, "batch.json")).then(() => true), true);
+  assert.equal(result.tasks[0].failureKind, "launch_error");
+});
+
 test("executeSupervisedTasks fails write-boundary acceptance when no audit source exists", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-audit-"));
   const result = await executeSupervisedTasks({

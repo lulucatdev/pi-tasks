@@ -130,14 +130,6 @@ async function emitSupervisorUpdate(batch: AuditBatchHandle, deps: SupervisorDep
   }
 }
 
-async function preflightTasks(tasks: NormalizedTaskSpec[]): Promise<void> {
-  for (const task of tasks) {
-    const stat = await fs.stat(task.cwd).catch(() => null);
-    if (!stat) throw new Error(`Task cwd does not exist: ${task.cwd}`);
-    if (!stat.isDirectory()) throw new Error(`Task cwd is not a directory: ${task.cwd}`);
-  }
-}
-
 function hasWriteBoundary(task: NormalizedTaskSpec): boolean {
   return Boolean(task.acceptance?.allowedWritePaths?.length || task.acceptance?.forbiddenWritePaths?.length);
 }
@@ -376,7 +368,6 @@ async function mapWithDynamicConcurrency<TInput, TOutput>(items: TInput[], getCo
 
 export async function executeSupervisedTasks(params: TasksToolParams, ctx: SupervisorContext, deps: SupervisorDependencies = {}): Promise<SupervisedTasksResult> {
   const normalized = normalizeTasksRun(params, ctx.cwd);
-  await preflightTasks(normalized.tasks);
   const writeAuditRequiresSerial = normalized.tasks.some(hasWriteBoundary) && !deps.captureChangedFiles;
   const schedulingConcurrency = writeAuditRequiresSerial ? 1 : normalized.effectiveConcurrency;
   const batch = await createBatch({
