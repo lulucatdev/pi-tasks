@@ -425,6 +425,47 @@ test("executeSupervisedTasks detects writes to files that were already dirty", a
   assert.ok(result.tasks[0].acceptance.errors.some((error) => error.includes("secret/token.txt")));
 });
 
+test("executeSupervisedTasks final result text shows the per-task table with finished icons", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-final-table-"));
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { id: "ch01", name: "ch01", prompt: "do" },
+      { id: "ch02", name: "ch02", prompt: "do" },
+      { id: "ch03", name: "ch03", prompt: "do" },
+    ],
+    concurrency: 3,
+    retry: { maxAttempts: 1 },
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: (input) => input.task.id === "ch02" ? failingAttempt(input) : successAttempt(input),
+  });
+
+  assert.equal(result.batch.status, "error");
+  assert.match(result.text, /^TASKS error · tasks · 2✓ 1✗ \/ 3/);
+  assert.match(result.text, /✓\s+ch01/);
+  assert.match(result.text, /✗\s+ch02/);
+  assert.match(result.text, /✓\s+ch03/);
+  assert.match(result.text, /\/tasks-ui /);
+  assert.match(result.text, /summary: /);
+  assert.match(result.text, /rerun failed: \/tasks-ui rerun failed /);
+});
+
+test("executeSupervisedTasks final result text uses 'done' verb when every task succeeds", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-final-done-"));
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { id: "ch01", name: "ch01", prompt: "do" },
+      { id: "ch02", name: "ch02", prompt: "do" },
+    ],
+    concurrency: 2,
+  }, { cwd: root, toolName: "tasks" }, { runAttempt: successAttempt });
+
+  assert.equal(result.batch.status, "success");
+  assert.match(result.text, /^TASKS done · tasks · 2✓ \/ 2/);
+  assert.match(result.text, /✓\s+ch01/);
+  assert.match(result.text, /✓\s+ch02/);
+  assert.doesNotMatch(result.text, /rerun failed:/);
+});
+
 test("executeSupervisedTasks terminalizes every task when one attempt fails", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-fail-"));
   const result = await executeSupervisedTasks({

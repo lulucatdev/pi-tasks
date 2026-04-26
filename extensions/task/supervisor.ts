@@ -16,7 +16,7 @@ import {
 import { evaluateAcceptance } from "./acceptance.ts";
 import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } from "./failure-classifier.ts";
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
-import { buildResultText, normalizeTasksRun } from "./run-tasks.ts";
+import { normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
@@ -173,21 +173,65 @@ function batchHeading(batch: BatchArtifact): string {
   return meta ?? "tasks";
 }
 
-function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
-  const counts = countLifecycle(tasks);
+type SnapshotMode = "running" | "done" | "error" | "aborted";
+
+function snapshotElapsed(batch: BatchArtifact, mode: SnapshotMode): string | undefined {
   const startedMs = Date.parse(batch.startedAt);
-  const elapsed = Number.isNaN(startedMs) ? undefined : formatElapsed(Date.now() - startedMs);
-  const heading = `TASKS running · ${batchHeading(batch)} · ${counts.done}/${tasks.length}${elapsed ? ` · ${elapsed}` : ""}`;
+  if (Number.isNaN(startedMs)) return undefined;
+  const finishedMs = mode === "running"
+    ? Date.now()
+    : (() => {
+        const candidate = batch.finishedAt ?? null;
+        const parsed = candidate ? Date.parse(candidate) : Number.NaN;
+        return Number.isNaN(parsed) ? Date.now() : parsed;
+      })();
+  return formatElapsed(finishedMs - startedMs);
+}
+
+function snapshotHeading(batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode): string {
+  const counts = countLifecycle(tasks);
+  const elapsed = snapshotElapsed(batch, mode);
+  const total = tasks.length;
+  const elapsedSuffix = elapsed ? ` · ${elapsed}` : "";
+  if (mode === "running") {
+    return `TASKS running · ${batchHeading(batch)} · ${counts.done}/${total}${elapsedSuffix}`;
+  }
+  const parts: string[] = [];
+  if (counts.success) parts.push(`${counts.success}✓`);
+  if (counts.error) parts.push(`${counts.error}✗`);
+  if (counts.aborted) parts.push(`${counts.aborted}⊘`);
+  if (parts.length === 0) parts.push("0");
+  return `TASKS ${mode} · ${batchHeading(batch)} · ${parts.join(" ")} / ${total}${elapsedSuffix}`;
+}
+
+function buildSnapshotText(batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode, extras: string[] = []): string {
   const idWidth = tasks.length === 0 ? 4 : Math.max(4, ...tasks.map((task) => Math.min(task.taskId.length, 20)));
   const taskLines = tasks.map((task) => compactTaskLine(task, idWidth));
-  const lines: string[] = [heading];
+  const lines: string[] = [snapshotHeading(batch, tasks, mode)];
   if (taskLines.length) {
     lines.push("");
     lines.push(...taskLines);
   }
   lines.push("");
   lines.push(`/tasks-ui ${batch.batchId}`);
+  if (extras.length) lines.push(...extras);
   return lines.join("\n");
+}
+
+function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
+  return buildSnapshotText(batch, tasks, "running");
+}
+
+function finalSnapshotMode(status: "success" | "error" | "aborted"): SnapshotMode {
+  return status === "success" ? "done" : status;
+}
+
+function buildFinalResultText(batch: BatchArtifact, tasks: TaskArtifact[], status: "success" | "error" | "aborted", summaryPath?: string): string {
+  const counts = countLifecycle(tasks);
+  const extras: string[] = [];
+  if (summaryPath) extras.push(`summary: ${summaryPath}`);
+  if (counts.error > 0) extras.push(`rerun failed: /tasks-ui rerun failed ${batch.batchId}`);
+  return buildSnapshotText(batch, tasks, finalSnapshotMode(status), extras);
 }
 
 async function readTaskArtifacts(batch: AuditBatchHandle): Promise<TaskArtifact[]> {
@@ -585,22 +629,9 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
   await writeSummaryMarkdown(batch.summaryPath, finalBatch, taskResults, params);
   await appendBatchEvent(batch.eventsPath, { schemaVersion: 1, seq: nextSeq(), at: finishedAt, type: "batch_finished", batchId: batch.batchId, status, data: { auditIntegrity: "ok" } });
 
-  const startedMsFinal = Date.parse(finalBatch.startedAt);
-  const finishedMsFinal = Date.parse(finishedAt);
-  const elapsed = Number.isNaN(startedMsFinal) || Number.isNaN(finishedMsFinal) ? undefined : formatElapsed(finishedMsFinal - startedMsFinal);
   return {
     batch: finalBatch,
     tasks: taskResults,
-    text: buildResultText({
-      batchId: finalBatch.batchId,
-      batchDir: finalBatch.batchDir,
-      status,
-      total: summary.total,
-      success: summary.success,
-      error: summary.error,
-      aborted: summary.aborted,
-      summaryPath: `${finalBatch.batchDir}/summary.md`,
-      elapsed,
-    }),
+    text: buildFinalResultText(finalBatch, taskResults, status, `${finalBatch.batchDir}/summary.md`),
   };
 }
