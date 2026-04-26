@@ -27,13 +27,15 @@ test("worker event writer redacts args and reads jsonl", async () => {
 test("runWorkerAttempt creates worker event channel path and exposes env", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-runner-events-"));
   const paths = buildAttemptPaths(buildBatchPaths(root, "batch"), "t001", 1);
+  let seenArgs;
   let seenEnv;
   await runWorkerAttempt({
     task: { id: "t001", name: "demo", prompt: "Do it", cwd: process.cwd() },
     attemptId: "t001-a1",
     attemptIndex: 1,
     paths,
-    spawnImpl: (_cmd, _args, options) => {
+    spawnImpl: (_cmd, args, options) => {
+      seenArgs = args;
       seenEnv = options.env;
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
@@ -43,6 +45,9 @@ test("runWorkerAttempt creates worker event channel path and exposes env", async
       return proc;
     },
   });
+  assert.ok(seenArgs.includes("--no-extensions"));
+  assert.ok(seenArgs.includes("--extension"));
+  assert.ok(seenArgs.some((arg) => String(arg).endsWith("extensions/task/index.ts")));
   assert.equal(seenEnv.PI_TASK_EVENTS_PATH, workerEventsPathForAttempt(paths.attemptDir));
   assert.equal(await fs.readFile(workerEventsPathForAttempt(paths.attemptDir), "utf-8"), "");
 });

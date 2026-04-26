@@ -2,11 +2,14 @@ import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { EventEmitter } from "node:events";
 import type { AttemptPaths } from "./audit-log.ts";
 import type { FailureKind, NormalizedTaskSpec, RuntimeOutcome, RuntimeStatus, TaskAttemptRecord } from "./types.ts";
 import { workerEventsPathForAttempt } from "./worker-events.ts";
 import { buildWorkerPrompt, buildWorkerSystemPrompt } from "./worker-protocol.ts";
+
+const TASK_EXTENSION_ENTRYPOINT = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 export interface AttemptRuntimeResult {
   attemptId: string;
@@ -91,7 +94,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
   await fs.writeFile(input.paths.stdoutPath, "", "utf-8");
   await fs.writeFile(workerEventsPathForAttempt(input.paths.attemptDir), "", "utf-8");
 
-  const args = ["--mode", "json", "-p", "--no-session"];
+  const args = ["--no-extensions", "--extension", TASK_EXTENSION_ENTRYPOINT, "--mode", "json", "-p", "--no-session"];
   if (input.fallbackModel) args.push("--model", input.fallbackModel);
   if (input.fallbackThinking) args.push("--thinking", input.fallbackThinking);
   args.push("--append-system-prompt", systemPromptPath, buildWorkerPrompt({
