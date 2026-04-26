@@ -106,7 +106,7 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
   assert.match(updates[0].text, /TASKS running: 0\/2 done, 0 running, 2 queued/);
   assert.ok(updates.some((snapshot) => snapshot.text.includes("Inspect: /tasks-ui")));
   assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: RUNNING")));
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("thinking: Inspect one")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("│ Thinking ◫ Inspect one ·")));
   assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: SUCCESS")));
   const task = await readJsonFile(path.join(result.batch.batchDir, "tasks", "t001.json"));
   assert.equal(task.activity[0].label, "Inspect one");

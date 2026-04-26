@@ -18,7 +18,7 @@ import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } f
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { buildResultText, normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
-import { renderActivityLine } from "./thinking-steps.ts";
+import { renderActivityCollapsedLine } from "./thinking-steps.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   deriveTaskFinalStatus,
@@ -100,7 +100,7 @@ function compactTaskLines(task: TaskArtifact): string[] {
   const failureText = task.failureKind !== "none" ? ` failure=${task.failureKind}` : "";
   const lines = [`- ${task.taskId} ${task.name}: ${state}${attemptText} acceptance=${task.acceptance.status}${failureText}`];
   const recentActivity = (task.activity ?? []).slice(-2);
-  for (const item of recentActivity) lines.push(`  ${renderActivityLine(item)}`);
+  for (const item of recentActivity) lines.push(`  ${renderActivityCollapsedLine(item)}`);
   return lines;
 }
 

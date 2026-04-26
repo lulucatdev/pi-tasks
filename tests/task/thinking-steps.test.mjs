@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createWorkerActivityState, extractWorkerActivity, renderActivityLine, summarizeThinkingStep } from "../../extensions/task/thinking-steps.ts";
+import { createWorkerActivityState, extractWorkerActivity, renderActivityCollapsedLine, renderActivitySummaryLines, summarizeThinkingStep } from "../../extensions/task/thinking-steps.ts";
 
 test("summarizeThinkingStep derives compact headings like pi-thinking-steps", () => {
   assert.equal(summarizeThinkingStep("**Reviewing file specifics**\n\nI need to inspect README.md."), "Reviewing file specifics");
@@ -30,7 +30,12 @@ test("extractWorkerActivity emits deduped thinking and tool activity", () => {
     args: { command: "echo secret", token: "abc" },
   }, state, ctx);
   assert.equal(tool?.kind, "tool");
-  assert.equal(tool?.label, "bash started");
+  assert.equal(tool?.label, "Run echo secret");
   assert.match(tool?.detail ?? "", /\[REDACTED\]/);
-  assert.equal(renderActivityLine(tool), 'tool: bash started {"command":"echo secret","token":"[REDACTED]"}');
+  assert.equal(renderActivityCollapsedLine(tool), "│ Thinking ◇ Run echo secret ·");
+  assert.deepEqual(renderActivitySummaryLines([first, tool]), [
+    "┆ Thinking Steps · Summary",
+    "├─ ◫ Reviewing file specifics",
+    "└─ ◇ Run echo secret",
+  ]);
 });
