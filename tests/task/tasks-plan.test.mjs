@@ -157,17 +157,16 @@ test("expandTasksPlan keeps acceptanceDefaults and rerun provenance on the expan
 test("buildPlanStartingText shows compact preview before the supervisor takes over", () => {
   const expanded = expandTasksPlan(chapterPlan());
   const text = buildPlanStartingText(chapterPlan(), expanded, "/repo");
-  assert.match(text, /TASKS plan starting: oracle-chapter-fixes · preparing 2 tasks/);
-  assert.match(text, /Cwd: \/repo/);
-  assert.match(text, /Rows: ch01, ch02/);
+  assert.match(text, /TASKS plan starting · oracle-chapter-fixes · preparing 2 tasks/);
+  assert.match(text, /rows: ch01, ch02/);
 });
 
 test("decoratePlanResultText appends plan path and synthesis hint", () => {
   const text = decoratePlanResultText(
-    "TASKS success: 2 success, 0 error, 0 aborted / 2 total",
+    "TASKS done · 2✓ / 2",
     "/repo/.pi/tasks/batch-1/plan.json",
     chapterPlan(),
   );
-  assert.match(text, /Plan: \/repo\/\.pi\/tasks\/batch-1\/plan\.json/);
-  assert.match(text, /synthesize per plan synthesis instructions/);
+  assert.match(text, /plan: \/repo\/\.pi\/tasks\/batch-1\/plan\.json/);
+  assert.match(text, /synthesize per plan instructions/);
 });

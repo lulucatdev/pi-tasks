@@ -94,9 +94,8 @@ test("buildResultText points to batch artifacts", () => {
     summaryPath: "/tmp/project/.pi/tasks/batch-1/summary.md",
   });
 
-  assert.match(text, /TASKS error: 1 success, 1 error, 1 aborted \/ 3 total/);
-  assert.match(text, /Artifacts: \/tmp\/project\/\.pi\/tasks\/batch-1/);
-  assert.match(text, /Summary: \/tmp\/project\/\.pi\/tasks\/batch-1\/summary\.md/);
-  assert.match(text, /Inspect: \/tasks-ui batch-1/);
-  assert.match(text, /Rerun failed: \/tasks-ui rerun failed batch-1/);
+  assert.match(text, /TASKS error · 1✓ 1✗ 1⊘ \/ 3/);
+  assert.match(text, /\/tasks-ui batch-1/);
+  assert.match(text, /summary: \/tmp\/project\/\.pi\/tasks\/batch-1\/summary\.md/);
+  assert.match(text, /rerun failed: \/tasks-ui rerun failed batch-1/);
 });

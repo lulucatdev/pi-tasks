@@ -184,11 +184,31 @@ export async function evaluateAcceptance(input: EvaluateAcceptanceInput): Promis
   addRegexChecks(checks, "report", reportText, contract.requiredReportRegex, contract.forbiddenReportRegex);
 
   if (contract.requireDeliverablesEvidence) {
-    const deliverablePaths = new Set((input.report?.deliverables ?? []).map((item) => item.path));
-    const evidenceValues = new Set((input.report?.evidence ?? []).map((item) => item.value));
-    for (const deliverable of deliverablePaths) {
-      const hasEvidence = evidenceValues.has(deliverable) || [...evidenceValues].some((value) => value.includes(deliverable));
-      checks.push({ name: "requireDeliverablesEvidence", status: hasEvidence ? "passed" : "failed", path: deliverable, message: hasEvidence ? "Deliverable has evidence." : "Deliverable is missing evidence." });
+    const deliverables = input.report?.deliverables ?? [];
+    const evidenceValues = (input.report?.evidence ?? []).map((item) => item.value).filter((value) => typeof value === "string" && value.trim());
+    for (const deliverable of deliverables) {
+      const kind = deliverable.kind;
+      if (kind === "file" || kind === "dir") {
+        const filePath = resolveCandidate(input.cwd, deliverable.path);
+        try {
+          const stat = await fs.stat(filePath);
+          if (kind === "file" && !stat.isFile()) {
+            checks.push({ name: "requireDeliverablesEvidence", status: "failed", path: deliverable.path, message: "Declared file deliverable is not a file." });
+          } else if (kind === "dir" && !stat.isDirectory()) {
+            checks.push({ name: "requireDeliverablesEvidence", status: "failed", path: deliverable.path, message: "Declared dir deliverable is not a directory." });
+          } else if (kind === "file" && stat.size === 0) {
+            checks.push({ name: "requireDeliverablesEvidence", status: "failed", path: deliverable.path, message: "Declared file deliverable is empty." });
+          } else {
+            checks.push({ name: "requireDeliverablesEvidence", status: "passed", path: deliverable.path, message: "Deliverable exists." });
+          }
+        } catch {
+          checks.push({ name: "requireDeliverablesEvidence", status: "failed", path: deliverable.path, message: "Declared deliverable is missing on disk." });
+        }
+      } else if (evidenceValues.length === 0) {
+        checks.push({ name: "requireDeliverablesEvidence", status: "failed", path: deliverable.path, message: `Non-file deliverable (${kind}) requires at least one evidence entry.` });
+      } else {
+        checks.push({ name: "requireDeliverablesEvidence", status: "passed", path: deliverable.path, message: "Non-file deliverable acknowledged with evidence entry." });
+      }
     }
   }
 

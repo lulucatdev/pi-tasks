@@ -70,7 +70,8 @@ test("executeSupervisedTasks writes success batch/task/attempt artifacts", async
 
   assert.equal(result.batch.status, "success");
   assert.equal(result.batch.summary.success, 1);
-  assert.match(result.text, /Artifacts:/);
+  assert.match(result.text, /TASKS done · /);
+  assert.match(result.text, /\/tasks-ui /);
 
   const task = await readJsonFile(path.join(result.batch.batchDir, "tasks", "t001.json"));
   assert.equal(task.finalStatus, "success");
@@ -94,7 +95,7 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
   }, { cwd: root, toolName: "tasks" }, {
     onUpdate: (snapshot) => updates.push(snapshot),
     runAttempt: async (input) => {
-      assert.ok(updates.some((snapshot) => snapshot.text.includes(`${input.task.id} ${input.task.name}: RUNNING`)));
+      assert.ok(updates.some((snapshot) => snapshot.text.includes(`◐  ${input.task.id.padEnd(4, " ")}`)));
       await input.onActivity?.({ at: "2026-04-26T00:00:00.500Z", taskId: input.task.id, attemptId: input.attemptId, kind: "thinking", label: `Inspect ${input.task.name}` });
       await new Promise((resolve) => setTimeout(resolve, 5));
       return successAttempt(input);
@@ -103,11 +104,11 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
 
   assert.equal(result.batch.status, "success");
   assert.ok(updates.length >= 4);
-  assert.match(updates[0].text, /TASKS running: 0\/2 done, 0 running, 2 queued/);
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("Inspect: /tasks-ui")));
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: RUNNING")));
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("│ Thinking ◫ Inspect one ·")));
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("t001 one: SUCCESS")));
+  assert.match(updates[0].text, /TASKS running · tasks · 0\/2/);
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("/tasks-ui ")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("◐  t001")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("Inspect one")));
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("✓  t001")));
   const task = await readJsonFile(path.join(result.batch.batchDir, "tasks", "t001.json"));
   assert.equal(task.activity[0].label, "Inspect one");
   const events = await readJsonlTolerant(path.join(result.batch.batchDir, "events.jsonl"));
@@ -131,7 +132,7 @@ test("executeSupervisedTasks emits heartbeat updates during quiet workers", asyn
 
   assert.equal(result.batch.status, "success");
   assert.ok(updates.length >= 4);
-  assert.ok(updates.some((snapshot) => snapshot.text.includes("Elapsed:")));
+  assert.ok(updates.some((snapshot) => /TASKS running · tasks · \d+\/1 · \d+s/.test(snapshot.text)));
 });
 
 test("executeSupervisedTasks creates batch artifacts before cwd launch failures", async () => {
@@ -158,7 +159,7 @@ test("executeSupervisedTasks creates batch artifacts before cwd launch failures"
   });
 
   assert.equal(result.batch.status, "error");
-  assert.match(updates[0].text, /TASKS running: 0\/1 done, 0 running, 1 queued/);
+  assert.match(updates[0].text, /TASKS running · tasks · 0\/1/);
   assert.equal(await fs.stat(path.join(result.batch.batchDir, "batch.json")).then(() => true), true);
   assert.equal(result.tasks[0].failureKind, "launch_error");
 });

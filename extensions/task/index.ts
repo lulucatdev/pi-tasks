@@ -131,13 +131,9 @@ function modelId(ctx: ExtensionContext): string | undefined {
   return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 
-function buildStartingText(params: TasksToolParams, ctx: ExtensionContext): string {
+function buildStartingText(params: TasksToolParams, _ctx: ExtensionContext): string {
   const total = Array.isArray(params.tasks) ? params.tasks.length : 0;
-  return [
-    `TASKS starting: preparing ${total} task${total === 1 ? "" : "s"}`,
-    `Cwd: ${ctx.cwd}`,
-    "Next: creating batch artifacts and launching workers",
-  ].join("\n");
+  return `TASKS starting · preparing ${total} task${total === 1 ? "" : "s"}`;
 }
 
 async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {

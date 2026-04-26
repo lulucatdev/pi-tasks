@@ -18,7 +18,6 @@ import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } f
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { buildResultText, normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
-import { renderActivityCollapsedLine } from "./thinking-steps.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   deriveTaskFinalStatus,
@@ -94,15 +93,69 @@ function countLifecycle(tasks: TaskArtifact[]): { done: number; queued: number; 
   };
 }
 
-function compactTaskLines(task: TaskArtifact): string[] {
-  const attempt = task.attempts.at(-1);
-  const state = (task.finalStatus ?? task.status).toUpperCase();
-  const attemptText = attempt ? ` attempt=${attempt.id}` : "";
-  const failureText = task.failureKind !== "none" ? ` failure=${task.failureKind}` : "";
-  const lines = [`- ${task.taskId} ${task.name}: ${state}${attemptText} acceptance=${task.acceptance.status}${failureText}`];
-  const recentActivity = (task.activity ?? []).slice(-2);
-  for (const item of recentActivity) lines.push(`  ${renderActivityCollapsedLine(item)}`);
-  return lines;
+function statusIcon(task: TaskArtifact): string {
+  switch (task.finalStatus ?? task.status) {
+    case "success": return "✓";
+    case "error": return "✗";
+    case "aborted": return "⊘";
+    case "running": return "◐";
+    default: return "·";
+  }
+}
+
+function failureReasonLabel(kind: FailureKind): string {
+  switch (kind) {
+    case "acceptance_failed": return "acceptance failed";
+    case "provider_transient": return "provider error (transient)";
+    case "provider_permanent": return "provider error";
+    case "launch_error": return "launch failed";
+    case "protocol_error": return "protocol error";
+    case "worker_incomplete": return "worker incomplete";
+    case "worker_stalled": return "worker stalled";
+    case "provider_stalled": return "provider stalled";
+    case "unknown_stall": return "stalled";
+    case "audit_failed": return "audit failed";
+    case "aborted": return "aborted";
+    case "unknown": return "error";
+    default: return "";
+  }
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1))}…`;
+}
+
+function activitySummaryFor(task: TaskArtifact, max = 60): string | undefined {
+  const items = task.activity ?? [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const label = items[index]?.label?.trim();
+    if (label) return truncate(label, max);
+  }
+  return undefined;
+}
+
+function taskBody(task: TaskArtifact): string {
+  const finalStatus = task.finalStatus;
+  if (finalStatus === "error") {
+    const reason = failureReasonLabel(task.failureKind) || "error";
+    return reason;
+  }
+  if (finalStatus === "aborted") return "";
+  if (finalStatus === "success") return "";
+  // running or queued
+  const activity = activitySummaryFor(task);
+  if (activity) return activity;
+  return task.status === "queued" ? "" : "…";
+}
+
+function compactTaskLine(task: TaskArtifact, idWidth: number): string {
+  const icon = statusIcon(task);
+  const truncated = task.taskId.length > idWidth ? truncate(task.taskId, idWidth) : task.taskId;
+  const body = taskBody(task);
+  if (!body) return `${icon}  ${truncated}`;
+  const padded = truncated.padEnd(idWidth, " ");
+  return `${icon}  ${padded}  ${body}`;
 }
 
 function formatElapsed(ms: number): string {
@@ -115,18 +168,26 @@ function formatElapsed(ms: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
+function batchHeading(batch: BatchArtifact): string {
+  const meta = batch.toolName === "tasks" || batch.toolName === "task" ? undefined : batch.toolName;
+  return meta ?? "tasks";
+}
+
 function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
   const counts = countLifecycle(tasks);
   const startedMs = Date.parse(batch.startedAt);
   const elapsed = Number.isNaN(startedMs) ? undefined : formatElapsed(Date.now() - startedMs);
-  return [
-    `TASKS running: ${counts.done}/${tasks.length} done, ${counts.running} running, ${counts.queued} queued`,
-    elapsed ? `Elapsed: ${elapsed}` : undefined,
-    `Batch: ${batch.batchId}`,
-    `Artifacts: ${batch.batchDir}`,
-    `Inspect: /tasks-ui ${batch.batchId}`,
-    ...tasks.flatMap(compactTaskLines),
-  ].filter(Boolean).join("\n");
+  const heading = `TASKS running · ${batchHeading(batch)} · ${counts.done}/${tasks.length}${elapsed ? ` · ${elapsed}` : ""}`;
+  const idWidth = tasks.length === 0 ? 4 : Math.max(4, ...tasks.map((task) => Math.min(task.taskId.length, 20)));
+  const taskLines = tasks.map((task) => compactTaskLine(task, idWidth));
+  const lines: string[] = [heading];
+  if (taskLines.length) {
+    lines.push("");
+    lines.push(...taskLines);
+  }
+  lines.push("");
+  lines.push(`/tasks-ui ${batch.batchId}`);
+  return lines.join("\n");
 }
 
 async function readTaskArtifacts(batch: AuditBatchHandle): Promise<TaskArtifact[]> {
@@ -524,6 +585,9 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
   await writeSummaryMarkdown(batch.summaryPath, finalBatch, taskResults, params);
   await appendBatchEvent(batch.eventsPath, { schemaVersion: 1, seq: nextSeq(), at: finishedAt, type: "batch_finished", batchId: batch.batchId, status, data: { auditIntegrity: "ok" } });
 
+  const startedMsFinal = Date.parse(finalBatch.startedAt);
+  const finishedMsFinal = Date.parse(finishedAt);
+  const elapsed = Number.isNaN(startedMsFinal) || Number.isNaN(finishedMsFinal) ? undefined : formatElapsed(finishedMsFinal - startedMsFinal);
   return {
     batch: finalBatch,
     tasks: taskResults,
@@ -536,6 +600,7 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
       error: summary.error,
       aborted: summary.aborted,
       summaryPath: `${finalBatch.batchDir}/summary.md`,
+      elapsed,
     }),
   };
 }

@@ -154,16 +154,21 @@ export interface TasksRunResultSummary {
   error: number;
   aborted: number;
   summaryPath?: string;
+  elapsed?: string;
 }
 
 export function buildResultText(summary: TasksRunResultSummary): string {
-  const parts = [`${summary.success} success`, `${summary.error} error`, `${summary.aborted} aborted`];
+  const headingStatus = summary.status === "success" ? "done" : summary.status;
+  const counts: string[] = [];
+  if (summary.success) counts.push(`${summary.success}✓`);
+  if (summary.error) counts.push(`${summary.error}✗`);
+  if (summary.aborted) counts.push(`${summary.aborted}⊘`);
+  if (counts.length === 0) counts.push("0 tasks");
+  const heading = `TASKS ${headingStatus} · ${counts.join(" ")} / ${summary.total}${summary.elapsed ? ` · ${summary.elapsed}` : ""}`;
   return [
-    `TASKS ${summary.status}: ${parts.join(", ")} / ${summary.total} total`,
-    `Batch: ${summary.batchId}`,
-    `Artifacts: ${summary.batchDir}`,
-    summary.summaryPath ? `Summary: ${summary.summaryPath}` : undefined,
-    `Inspect: /tasks-ui ${summary.batchId}`,
-    summary.error > 0 ? `Rerun failed: /tasks-ui rerun failed ${summary.batchId}` : undefined,
+    heading,
+    `/tasks-ui ${summary.batchId}`,
+    summary.summaryPath ? `summary: ${summary.summaryPath}` : undefined,
+    summary.error > 0 ? `rerun failed: /tasks-ui rerun failed ${summary.batchId}` : undefined,
   ].filter(Boolean).join("\n");
 }

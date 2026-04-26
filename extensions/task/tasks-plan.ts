@@ -280,21 +280,20 @@ export async function writePlanArtifact(batchDir: string, batchId: string, input
 	return planPath;
 }
 
-export function buildPlanStartingText(input: TasksPlanInput, expansion: ExpandedTasksPlan, cwd: string): string {
+export function buildPlanStartingText(input: TasksPlanInput, expansion: ExpandedTasksPlan, _cwd: string): string {
 	const total = expansion.rowIds.length;
+	const preview = expansion.rowIds.slice(0, 5).join(", ");
+	const more = total > 5 ? `, …(+${total - 5})` : "";
 	return [
-		`TASKS plan starting: ${input.batchName} · preparing ${total} task${total === 1 ? "" : "s"}`,
-		`Cwd: ${cwd}`,
-		`Rows: ${expansion.rowIds.slice(0, 8).join(", ")}${total > 8 ? `, … (+${total - 8} more)` : ""}`,
-		"Next: creating batch artifacts and launching workers",
-	].join("\n");
+		`TASKS plan starting · ${input.batchName} · preparing ${total} task${total === 1 ? "" : "s"}`,
+		preview ? `rows: ${preview}${more}` : undefined,
+	].filter(Boolean).join("\n");
 }
 
 export function decoratePlanResultText(baseText: string, planPath: string, input: TasksPlanInput): string {
-	const extras: string[] = [];
-	extras.push(`Plan: ${planPath}`);
+	const extras: string[] = [`plan: ${planPath}`];
 	if (input.synthesis?.instructions) {
-		extras.push(`Next: synthesize per plan synthesis instructions (mode=${input.synthesis.mode ?? "parent"}).`);
+		extras.push(`next: synthesize per plan instructions (mode=${input.synthesis.mode ?? "parent"})`);
 	}
 	return [baseText, ...extras].join("\n");
 }
