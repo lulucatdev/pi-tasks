@@ -25,6 +25,21 @@ function resolveCandidate(baseCwd: string, target: string): string {
   return path.isAbsolute(target) ? target : path.resolve(baseCwd, target);
 }
 
+function compileAcceptanceRegex(pattern: string): { regex: RegExp } | { error: string } {
+  let source = pattern;
+  const flags = new Set("m");
+  const inlineFlags = source.match(/^\(\?([imsu]+)\)/i);
+  if (inlineFlags) {
+    for (const flag of inlineFlags[1]!.toLowerCase()) flags.add(flag);
+    source = source.slice(inlineFlags[0].length);
+  }
+  try {
+    return { regex: new RegExp(source, [...flags].join("")) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function walkFiles(dir: string, prefix = ""): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -70,10 +85,14 @@ async function checkRequiredPath(baseCwd: string, check: PathCheck): Promise<Acc
     if (stat.isFile() && (check.requiredRegex?.length || check.forbiddenRegex?.length)) {
       const text = await readIfFile(filePath);
       for (const pattern of check.requiredRegex ?? []) {
-        if (!new RegExp(pattern, "m").test(text)) results.push({ name: "requiredPaths.requiredRegex", status: "failed", path: check.path, message: `Required regex did not match: ${pattern}` });
+        const compiled = compileAcceptanceRegex(pattern);
+        if ("error" in compiled) results.push({ name: "requiredPaths.requiredRegex", status: "failed", path: check.path, message: `Invalid required regex ${pattern}: ${compiled.error}` });
+        else if (!compiled.regex.test(text)) results.push({ name: "requiredPaths.requiredRegex", status: "failed", path: check.path, message: `Required regex did not match: ${pattern}` });
       }
       for (const pattern of check.forbiddenRegex ?? []) {
-        if (new RegExp(pattern, "m").test(text)) results.push({ name: "requiredPaths.forbiddenRegex", status: "failed", path: check.path, message: `Forbidden regex matched: ${pattern}` });
+        const compiled = compileAcceptanceRegex(pattern);
+        if ("error" in compiled) results.push({ name: "requiredPaths.forbiddenRegex", status: "failed", path: check.path, message: `Invalid forbidden regex ${pattern}: ${compiled.error}` });
+        else if (compiled.regex.test(text)) results.push({ name: "requiredPaths.forbiddenRegex", status: "failed", path: check.path, message: `Forbidden regex matched: ${pattern}` });
       }
     }
     if (results.length === 0) results.push({ name: "requiredPaths", status: "passed", path: check.path, message: "Required path exists." });
@@ -95,11 +114,21 @@ export interface EvaluateAcceptanceInput {
 
 function addRegexChecks(results: AcceptanceCheckResult[], name: string, text: string, required: string[] = [], forbidden: string[] = []): void {
   for (const pattern of required) {
-    const ok = new RegExp(pattern, "m").test(text);
+    const compiled = compileAcceptanceRegex(pattern);
+    if ("error" in compiled) {
+      results.push({ name: `${name}.requiredRegex`, status: "failed", message: `Invalid required regex ${pattern}: ${compiled.error}` });
+      continue;
+    }
+    const ok = compiled.regex.test(text);
     results.push({ name: `${name}.requiredRegex`, status: ok ? "passed" : "failed", message: ok ? `Matched required regex: ${pattern}` : `Required regex did not match: ${pattern}` });
   }
   for (const pattern of forbidden) {
-    const matched = new RegExp(pattern, "m").test(text);
+    const compiled = compileAcceptanceRegex(pattern);
+    if ("error" in compiled) {
+      results.push({ name: `${name}.forbiddenRegex`, status: "failed", message: `Invalid forbidden regex ${pattern}: ${compiled.error}` });
+      continue;
+    }
+    const matched = compiled.regex.test(text);
     results.push({ name: `${name}.forbiddenRegex`, status: matched ? "failed" : "passed", message: matched ? `Forbidden regex matched: ${pattern}` : `Forbidden regex did not match: ${pattern}` });
   }
 }

@@ -73,6 +73,31 @@ test("evaluateAcceptance fails missing required files and forbidden output", asy
   assert.ok(result.errors.some((error) => error.includes("Forbidden regex")));
 });
 
+test("evaluateAcceptance handles inline case-insensitive regex flags and invalid regexes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-acceptance-regex-"));
+  await fs.writeFile(path.join(root, "out.md"), "No repository modifications were made.\n", "utf-8");
+
+  const ok = await evaluateAcceptance({
+    cwd: root,
+    workerLog: "No repository modifications were made.",
+    report: report(),
+    contract: {
+      requiredPaths: [{ path: "out.md", requiredRegex: ["(?i)no repository modifications"] }],
+      requiredOutputRegex: ["(?i)no repository modifications"],
+    },
+  });
+  assert.equal(ok.status, "passed");
+
+  const invalid = await evaluateAcceptance({
+    cwd: root,
+    workerLog: "done",
+    report: report(),
+    contract: { requiredOutputRegex: ["["] },
+  });
+  assert.equal(invalid.status, "failed");
+  assert.ok(invalid.errors.some((error) => error.includes("Invalid required regex")));
+});
+
 test("evaluateAcceptance audits changed files against write allowlist and forbidden paths", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-acceptance-write-"));
   const result = await evaluateAcceptance({
