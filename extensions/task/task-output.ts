@@ -1,8 +1,9 @@
 import type { Message } from "@mariozechner/pi-ai";
+import { previewToolInput } from "./redaction.ts";
 
 export type TaskDisplayItem =
   | { type: "text"; text: string }
-  | { type: "toolCall"; name: string; args: Record<string, unknown> };
+  | { type: "toolCall"; name: string; argsPreview: string };
 
 export function getAssistantVisibleText(message: Pick<Message, "content">): string {
   return message.content
@@ -27,7 +28,7 @@ export function extractDisplayItems(messages: Message[]): TaskDisplayItem[] {
     if (message.role !== "assistant") continue;
     for (const part of message.content) {
       if (part.type === "text") items.push({ type: "text", text: part.text });
-      else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
+      else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, argsPreview: previewToolInput(part.arguments) });
     }
   }
   return items;

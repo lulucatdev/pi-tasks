@@ -11,7 +11,8 @@
     "tasks"
   ],
   "scripts": {
-    "test": "node --test tests/task/*.mjs"
+    "test": "node --test tests/task/*.mjs",
+    "smoke": "bash scripts/task-audit-smoke.sh"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",

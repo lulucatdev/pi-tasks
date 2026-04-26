@@ -1,42 +1,106 @@
 # Tasks Extension
 
-Root-only parallel task workers for pi.
+Root-only supervised task agents for pi.
 
-Installed resources:
-- Extension: `~/.pi/agent/extensions/task/index.ts`
+## Tools
 
-Features:
-- `/tasks-start` appends task-oriented guidance to the current composer, or prints it for manual reuse when insertion is unavailable
-- `task` tool for launching one isolated task worker
-- `tasks` tool for launching one or more isolated task workers in parallel
-- Optional per-task `name` for human-readable identity
-- Automatic timestamped id (`YYYYMMDDHHmmss-slug`) for every task, e.g. `20260323074203-wgpu-render-path`
-- No nested task creation inside child workers
-- Worker agents write their results to a pre-created `.pi/tasks/<id>.md` output file
-- The tool result returns the absolute path so the root agent can read it
-- `/tasks-ui` dashboard for inspecting runs, rerunning, copying prompts, pasting prompts, and aborting running tasks
+- `task` launches one supervised task agent.
+- `tasks` launches one or more supervised task agents with configurable concurrency, retry, throttling, audit, and acceptance contracts.
+- `/tasks-start` inserts task-oriented guidance into the editor without triggering an LLM turn.
+- `/tasks-ui` reads batch artifacts, shows failure triage, opens task/attempt details, and prepares rerun payloads.
 
-Quick examples:
-- `/tasks-start`
-- `Use task to inspect the auth flow in isolation`
-- `Use tasks to inspect the auth flow, trace the DB schema, and find the tests in parallel`
-- `Run tasks with names: find-schemas, trace-controller-flow, tests`
-- `/tasks-ui`
-- `/tasks-ui 20260323074203-auth-flow-check`
-- `/tasks-ui abort 20260323074203-auth-flow-check`
+## Input model
 
-`/tasks-ui` keys:
-- `Up/Down` or `j/k`: move selection
-- `Enter`: open detail view for the selected run
-- `r`: rerun the selected task batch
-- `c`: copy the selected task prompt set to the clipboard
-- `p`: paste the selected task prompt set into the editor
-- `a`: abort the first running task in the selected run
-- `Esc`: close, or return from detail view
+```ts
+type TaskSpecInput = {
+  id?: string;
+  name: string;
+  prompt: string;
+  cwd?: string;
+  acceptance?: AcceptanceContract;
+  metadata?: Record<string, string>;
+};
 
-Notes:
-- `/tasks-start` only inserts or prints visible guidance; it does not create hidden files or switch the session into a hidden tasks mode.
-- Task output files live under `.pi/tasks/`.
-- Task workers inherit the current model unless pi resolves a different model at runtime.
-- Task workers inherit the current tool environment except `task`, `tasks`, and `subagent*` tools.
-- Task results are identified as `name + id` when a name exists, otherwise `task + id`.
+type TasksToolParams = {
+  tasks: TaskSpecInput[];
+  concurrency?: number;
+  retry?: ParentRetryPolicy;
+  throttle?: ThrottlePolicy;
+  audit?: { level?: "basic" | "full" };
+  acceptanceDefaults?: AcceptanceContract;
+};
+```
+
+## Completion protocol
+
+A worker must write:
+
+- `worker.md` for human-readable notes;
+- `task-report.json` for machine-readable completion.
+
+The supervisor trusts `task-report.json`, not natural language claims or legacy `TASK_STATUS` markers.
+
+## Acceptance contracts
+
+Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths.
+
+Example:
+
+```ts
+tasks({
+  concurrency: 8,
+  tasks: [{
+    name: "stage9-ch05",
+    prompt: "Process chapter 05...",
+    acceptance: {
+      requiredPaths: [{ path: "Stage9/ch05_delivery.md", minBytes: 200 }],
+      forbiddenPaths: ["ch05_delivery.md"],
+      forbiddenOutputRegex: ["已开始|待执行|TODO"],
+      allowedWritePaths: ["Stage9/**", ".pi/tasks/**"],
+      requireDeliverablesEvidence: true
+    }
+  }]
+});
+```
+
+## Artifacts
+
+```text
+.pi/tasks/<batchId>/
+  batch.json
+  events.jsonl
+  summary.md
+  tasks/<taskId>.json
+  attempts/<taskId>/attempt-N/
+    worker.md
+    task-report.json
+    stdout.jsonl
+    stderr.txt
+    attempt.json
+```
+
+`summary.md` is the quickest human entry point after a run.
+
+## Artifact UI
+
+```text
+/tasks-ui
+/tasks-ui help
+/tasks-ui <batchId|batchDir>
+/tasks-ui <batchId|batchDir> task <taskId>
+/tasks-ui <batchId|batchDir> attempt <taskId> <attemptId|latest>
+/tasks-ui rerun failed <batchId|batchDir>
+/tasks-ui rerun acceptance-failed <batchId|batchDir>
+/tasks-ui rerun provider-transient <batchId|batchDir>
+/tasks-ui rerun selected <batchId|batchDir> <taskId> [taskId...]
+```
+
+Batch detail shows failed tasks first with reason, retryability, and artifact inspection commands. Task detail shows prompt/cwd, timeline, acceptance/report state, deliverables, evidence, and latest attempt paths. Attempt detail shows runtime status, exit/stop reason, stderr tail, malformed stdout count, and every attempt artifact path.
+
+## Retry boundary
+
+Workers should retry recoverable work errors internally and record them in `internalRetries`.
+
+The parent supervisor retries only launch/session/provider transient failures such as `429`, `5xx`, `overloaded`, `Internal server error`, `terminated`, timeout, and connection reset when no valid worker report was produced.
+
+Acceptance failures, blocked reports, invalid contracts, and user aborts are not parent-retryable by default.

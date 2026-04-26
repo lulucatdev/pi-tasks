@@ -7,11 +7,50 @@ Do not maintain the live runtime copy by syncing from `pi-tools` anymore.
 
 ## What lives here
 
-- `extensions/task/` - the task extension and its internal modules
-- `tests/task/` - focused Node tests for audit files, task flow, and `/tasks-start`
+- `extensions/task/` - the task extension and supervisor runtime modules
+- `tests/task/` - focused Node tests for status, audit artifacts, supervisor behavior, retry, throttle, UI helpers, and smoke fixtures
 - `scripts/task-audit-smoke.sh` - end-to-end temp-workspace smoke validation
-- `docs/specs/` - task design specs
+- `docs/specs/` - task design specs, including `tasks-supervisor-v3.md`
 - `docs/plans/` - implementation plans for task work
+
+## Runtime model
+
+Tasks Supervisor V3 treats each task as a supervised task agent attempt.
+
+- The root process owns planning, scheduling, retry classification, acceptance checks, and synthesis.
+- Workers handle recoverable work-level errors themselves and submit `task-report.json`.
+- Parent retry is reserved for launch/session/provider transient failures that did not produce a valid report.
+- `success` requires runtime success, valid worker report, `completed` status, acceptance pass, and finalized audit artifacts.
+- Legacy `TASK_STATUS` markers are only warning signals; they are not a completion protocol.
+
+Batch artifacts live under:
+
+```text
+.pi/tasks/<batchId>/
+  batch.json
+  events.jsonl
+  summary.md
+  tasks/<taskId>.json
+  attempts/<taskId>/attempt-N/
+```
+
+## Artifact UI
+
+Use `/tasks-ui` to navigate persisted artifacts:
+
+```text
+/tasks-ui
+/tasks-ui help
+/tasks-ui <batchId>
+/tasks-ui <batchId> task <taskId>
+/tasks-ui <batchId> attempt <taskId> <attemptId|latest>
+/tasks-ui rerun failed <batchId>
+/tasks-ui rerun acceptance-failed <batchId>
+/tasks-ui rerun provider-transient <batchId>
+/tasks-ui rerun selected <batchId> <taskId> [taskId...]
+```
+
+The UI is artifact-first: batch detail groups failures, task detail shows acceptance/report state, attempt detail shows runtime fields and artifact paths, and rerun preparation preserves parent batch provenance.
 
 ## Load it in pi
 
@@ -33,8 +72,8 @@ npm run test
 npm run smoke
 ```
 
-## Runtime model
+## Key docs
 
-- Maintain task-related changes here
-- Load it in pi through the local package path
-- Avoid full-runtime sync for task work
+- `docs/specs/tasks-supervisor-v3.md` - authoritative V3 design
+- `docs/task-failure-audit-2026-04-26.md` - incident audit and V3 replacement notes
+- `extensions/task/README.md` - tool usage and artifact overview
