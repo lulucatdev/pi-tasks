@@ -359,7 +359,7 @@ test("executeSupervisedTasks attributes git changes only to the task whose allow
       const tracker = input.task.id === "t001" ? order01 : order02;
       tracker.started = order++;
       await fs.writeFile(path.join(root, "chapters", input.task.id === "t001" ? "ch01" : "ch02", "out.tex"), "x", "utf-8");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 400));
       const settled = await successAttempt(input);
       tracker.finished = order++;
       return settled;

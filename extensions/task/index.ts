@@ -11,7 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { registerTasksStartCommand } from "./commands.ts";
 import { buildRerunParamsFromBatchDir, isRerunFilter, RERUN_FILTERS } from "./rerun.ts";
 import { buildResultText, enforceInlineTasksLimit, validateTasksFanoutUsage } from "./run-tasks.ts";
-import { executeSupervisedTasks, type SupervisedTasksResult } from "./supervisor.ts";
+import { executeSupervisedTasks, renderColoredFromText, type SupervisedTasksResult } from "./supervisor.ts";
 import { listBatches, loadBatchDetail, renderAttemptDetailLines, renderBatchDetailLines, renderBatchListLines, renderTaskDetailLines, renderTasksUiHelpLines, resolveBatchDir } from "./task-ui.ts";
 import { registerTaskReportTool } from "./task-report-tool.ts";
 import { buildPlanStartingText, decoratePlanResultText, expandTasksPlan, validateTasksPlanInput, writePlanArtifact, type TasksPlanInput } from "./tasks-plan.ts";
@@ -284,6 +284,10 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : buildResultText({ batchId: "unknown", batchDir: "unknown", status: "incomplete", total: 0, success: 0, error: 0, aborted: 0 });
+      const details = (result as any).details;
+      if (details?.batch && Array.isArray(details?.tasks)) {
+        return new Text(renderColoredFromText(theme as any, text, details.batch, details.tasks), 0, 0);
+      }
       const color = text.startsWith("TASKS running") || text.startsWith("TASKS starting") ? "warning" : result.isError ? "error" : "success";
       return new Text(theme.fg(color, text), 0, 0);
     },
@@ -311,6 +315,10 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "(no task result)";
+      const details = (result as any).details;
+      if (details?.batch && Array.isArray(details?.tasks)) {
+        return new Text(renderColoredFromText(theme as any, text, details.batch, details.tasks), 0, 0);
+      }
       const color = text.startsWith("TASKS running") || text.startsWith("TASKS starting") ? "warning" : result.isError ? "error" : "success";
       return new Text(theme.fg(color, text), 0, 0);
     },
@@ -343,6 +351,10 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "(no plan result)";
+      const details = (result as any).details;
+      if (details?.batch && Array.isArray(details?.tasks)) {
+        return new Text(renderColoredFromText(theme as any, text, details.batch, details.tasks), 0, 0);
+      }
       const color = text.startsWith("TASKS running") || text.startsWith("TASKS starting") || text.startsWith("TASKS plan starting") ? "warning" : result.isError ? "error" : "success";
       return new Text(theme.fg(color, text), 0, 0);
     },

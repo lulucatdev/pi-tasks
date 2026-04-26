@@ -218,6 +218,101 @@ function buildSnapshotText(batch: BatchArtifact, tasks: TaskArtifact[], mode: Sn
   return lines.join("\n");
 }
 
+export interface SnapshotTheme {
+  fg: (role: string, text: string) => string;
+  bold?: (text: string) => string;
+}
+
+function paint(theme: SnapshotTheme, role: string, text: string): string {
+  try { return theme.fg(role, text); } catch { return text; }
+}
+
+function statusRole(task: TaskArtifact): { icon: string; idRole: string; bodyRole: string } {
+  switch (task.finalStatus ?? task.status) {
+    case "success": return { icon: "success", idRole: "muted", bodyRole: "muted" };
+    case "error": return { icon: "error", idRole: "default", bodyRole: "error" };
+    case "aborted": return { icon: "warning", idRole: "muted", bodyRole: "muted" };
+    case "running": return { icon: "accent", idRole: "default", bodyRole: "muted" };
+    default: return { icon: "muted", idRole: "muted", bodyRole: "muted" };
+  }
+}
+
+function colorTaskLine(theme: SnapshotTheme, task: TaskArtifact, idWidth: number): string {
+  const role = statusRole(task);
+  const icon = paint(theme, role.icon, statusIcon(task));
+  const truncated = task.taskId.length > idWidth ? truncate(task.taskId, idWidth) : task.taskId;
+  const body = taskBody(task);
+  if (!body) return `${icon}  ${paint(theme, role.idRole, truncated)}`;
+  const padding = " ".repeat(Math.max(0, idWidth - truncated.length));
+  return `${icon}  ${paint(theme, role.idRole, truncated)}${padding}  ${paint(theme, role.bodyRole, body)}`;
+}
+
+function colorHeading(theme: SnapshotTheme, batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode): string {
+  const counts = countLifecycle(tasks);
+  const elapsed = snapshotElapsed(batch, mode);
+  const total = tasks.length;
+  const sep = paint(theme, "muted", "·");
+  const tasksLabel = paint(theme, "muted", "TASKS");
+  const verbRole = mode === "running" ? "warning" : mode === "done" ? "success" : mode === "error" ? "error" : "warning";
+  const verbText = theme.bold ? theme.bold(mode) : mode;
+  const verb = paint(theme, verbRole, verbText);
+  const heading = paint(theme, "accent", batchHeading(batch));
+  const elapsedSuffix = elapsed ? ` ${sep} ${paint(theme, "muted", elapsed)}` : "";
+  if (mode === "running") {
+    const progress = `${counts.done}/${total}`;
+    return `${tasksLabel} ${verb} ${sep} ${heading} ${sep} ${progress}${elapsedSuffix}`;
+  }
+  const parts: string[] = [];
+  if (counts.success) parts.push(paint(theme, "success", `${counts.success}✓`));
+  if (counts.error) parts.push(paint(theme, "error", `${counts.error}✗`));
+  if (counts.aborted) parts.push(paint(theme, "warning", `${counts.aborted}⊘`));
+  if (parts.length === 0) parts.push(paint(theme, "muted", "0"));
+  return `${tasksLabel} ${verb} ${sep} ${heading} ${sep} ${parts.join(" ")} ${paint(theme, "muted", `/ ${total}`)}${elapsedSuffix}`;
+}
+
+function colorExtra(theme: SnapshotTheme, extra: string): string {
+  if (extra.startsWith("rerun failed:")) return paint(theme, "warning", extra);
+  if (extra.startsWith("summary:")) return paint(theme, "muted", extra);
+  if (extra.startsWith("plan:")) return paint(theme, "muted", extra);
+  if (extra.startsWith("next:")) return paint(theme, "info", extra);
+  if (extra.startsWith("rows:")) return paint(theme, "muted", extra);
+  return extra;
+}
+
+export function renderColoredSnapshot(theme: SnapshotTheme, batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode, extras: string[] = []): string {
+  const idWidth = tasks.length === 0 ? 4 : Math.max(4, ...tasks.map((task) => Math.min(task.taskId.length, 20)));
+  const taskLines = tasks.map((task) => colorTaskLine(theme, task, idWidth));
+  const lines: string[] = [colorHeading(theme, batch, tasks, mode)];
+  if (taskLines.length) {
+    lines.push("");
+    lines.push(...taskLines);
+  }
+  lines.push("");
+  lines.push(paint(theme, "muted", `/tasks-ui ${batch.batchId}`));
+  for (const extra of extras) lines.push(colorExtra(theme, extra));
+  return lines.join("\n");
+}
+
+export function renderColoredFromText(theme: SnapshotTheme, plainText: string, batch?: BatchArtifact, tasks?: TaskArtifact[]): string {
+  if (!batch || !Array.isArray(tasks)) return plainText;
+  const status = batch.status;
+  const mode: SnapshotMode = status === "running" || status === "initializing" || status === "incomplete" ? "running"
+    : status === "success" ? "done"
+    : status === "error" ? "error"
+    : "aborted";
+  // Re-derive extras from the plain text trailing lines so we keep parity with whatever the
+  // text builder emitted (summary path, rerun, plan path, synthesis hint, etc.).
+  const trailing = plainText.split("\n").reverse();
+  const extras: string[] = [];
+  for (const line of trailing) {
+    const trimmed = line.trim();
+    if (!trimmed) break;
+    if (trimmed.startsWith("/tasks-ui ")) break;
+    if (/^(rerun failed:|summary:|plan:|next:|rows:)/.test(trimmed)) extras.unshift(trimmed);
+  }
+  return renderColoredSnapshot(theme, batch, tasks, mode, extras);
+}
+
 function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
   return buildSnapshotText(batch, tasks, "running");
 }
