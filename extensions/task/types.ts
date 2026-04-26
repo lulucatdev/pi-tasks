@@ -181,10 +181,6 @@ export interface ThrottlePolicy {
   windowSize?: number;
 }
 
-export interface AuditOptions {
-  level?: "basic" | "full";
-}
-
 export interface TaskSpecInput {
   id?: string;
   name: string;
@@ -199,7 +195,6 @@ export interface TasksToolParams {
   concurrency?: number;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
-  audit?: AuditOptions;
   acceptanceDefaults?: AcceptanceContract;
   parentBatchId?: string;
   rerunOfTaskIds?: string[];

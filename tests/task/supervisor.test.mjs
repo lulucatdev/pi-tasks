@@ -163,7 +163,7 @@ test("executeSupervisedTasks creates batch artifacts before cwd launch failures"
   assert.equal(result.tasks[0].failureKind, "launch_error");
 });
 
-test("executeSupervisedTasks fails write-boundary acceptance when no audit source exists", async () => {
+test("executeSupervisedTasks fails write-boundary acceptance when neither git diff nor worker telemetry is available", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-write-audit-"));
   const result = await executeSupervisedTasks({
     tasks: [{ name: "write", prompt: "Write only allowed files", acceptance: { allowedWritePaths: ["allowed/**"] } }],
@@ -173,6 +173,45 @@ test("executeSupervisedTasks fails write-boundary acceptance when no audit sourc
   assert.equal(result.batch.status, "error");
   assert.equal(result.tasks[0].failureKind, "acceptance_failed");
   assert.ok(result.tasks[0].acceptance.errors.some((error) => error.includes("requires write audit")));
+});
+
+test("executeSupervisedTasks accepts write-boundary tasks in non-git cwds when telemetry observed the writes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-telemetry-audit-"));
+  const result = await executeSupervisedTasks({
+    tasks: [{ name: "write", prompt: "Write inside allowed zone", acceptance: { allowedWritePaths: ["allowed/**"] } }],
+    concurrency: 1,
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      const { appendWorkerEvent, buildWorkerEvent, workerEventsPathForAttempt } = await import("../../extensions/task/worker-events.ts");
+      const eventsPath = workerEventsPathForAttempt(input.paths.attemptDir);
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await appendWorkerEvent(eventsPath, buildWorkerEvent({ type: "tool_call_started", taskId: input.task.id, attemptId: input.attemptId, tool: "edit", args: { path: "allowed/out.md" } }));
+      await appendWorkerEvent(eventsPath, buildWorkerEvent({ type: "file_write_observed", taskId: input.task.id, attemptId: input.attemptId, tool: "edit", path: "allowed/out.md", args: { path: "allowed/out.md" } }));
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.status, "success");
+  assert.equal(result.tasks[0].acceptance.status, "passed");
+});
+
+test("executeSupervisedTasks accepts read-only write-boundary tasks when telemetry channel was alive", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-telemetry-empty-"));
+  const result = await executeSupervisedTasks({
+    tasks: [{ name: "read-only", prompt: "Read but do not write", acceptance: { allowedWritePaths: ["allowed/**"] } }],
+    concurrency: 1,
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      const { appendWorkerEvent, buildWorkerEvent, workerEventsPathForAttempt } = await import("../../extensions/task/worker-events.ts");
+      const eventsPath = workerEventsPathForAttempt(input.paths.attemptDir);
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await appendWorkerEvent(eventsPath, buildWorkerEvent({ type: "tool_call_started", taskId: input.task.id, attemptId: input.attemptId, tool: "read", args: { path: "README.md" } }));
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.status, "success");
+  assert.equal(result.tasks[0].acceptance.status, "passed");
 });
 
 test("executeSupervisedTasks preserves rerun provenance and emits unique event sequence numbers", async () => {

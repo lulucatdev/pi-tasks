@@ -91,7 +91,6 @@ const TasksParams = Type.Object({
   concurrency: Type.Optional(Type.Number({ description: "Requested batch concurrency" })),
   retry: Type.Optional(RetrySchema),
   throttle: Type.Optional(ThrottleSchema),
-  audit: Type.Optional(Type.Object({ level: Type.Optional(Type.Union([Type.Literal("basic"), Type.Literal("full")])) })),
   acceptanceDefaults: Type.Optional(AcceptanceSchema),
   parentBatchId: Type.Optional(Type.String()),
   rerunOfTaskIds: Type.Optional(Type.Array(Type.String())),
@@ -108,7 +107,7 @@ const TasksPlanRowSchema = Type.Object({
 
 const TasksPlanParams = Type.Object({
   batchName: Type.String({ description: "Short batch label, used in default task names and stored in plan.json." }),
-  concurrency: Type.Optional(Type.Number({ description: "Requested batch concurrency. Write-boundary rows currently serialize when allowedWritePaths is set with a shared git audit source; use disjoint cwds or paths for true parallelism." })),
+  concurrency: Type.Optional(Type.Number({ description: "Requested batch concurrency. Tasks with disjoint allowedWritePaths run truly in parallel; declare overlapping zones only when you intentionally want one task at a time." })),
   matrix: Type.Array(TasksPlanRowSchema, { minItems: 1, maxItems: MAX_TASKS, description: "One row per leaf task. Keep rows compact: id + per-row vars only." }),
   promptTemplate: Type.String({ description: "Prompt template with {{key}} placeholders. Substituted per row using row.id, row.name, row.cwd, and row.vars." }),
   nameTemplate: Type.Optional(Type.String({ description: "Optional task name template (default: '{{batchName}} {{id}}')." })),
@@ -117,7 +116,6 @@ const TasksPlanParams = Type.Object({
   metadataTemplate: Type.Optional(MetadataSchema),
   retry: Type.Optional(RetrySchema),
   throttle: Type.Optional(ThrottleSchema),
-  audit: Type.Optional(Type.Object({ level: Type.Optional(Type.Union([Type.Literal("basic"), Type.Literal("full")])) })),
   acceptanceDefaults: Type.Optional(AcceptanceSchema),
   synthesis: Type.Optional(Type.Object({
     mode: Type.Optional(Type.Union([Type.Literal("parent"), Type.Literal("report-only")], { description: "Who synthesizes after the batch finishes. Default: parent." })),
@@ -333,6 +331,9 @@ export default function taskExtension(pi: ExtensionAPI) {
       "Reference row vars with {{key}} in promptTemplate, nameTemplate, cwdTemplate, acceptanceTemplate, and metadataTemplate.",
       "An array-valued var splats into list fields when the entry is exactly {{key}} (e.g. allowedWritePaths: [\"{{allowedWritePaths}}\"]); inside a string template it joins with newlines.",
       "Set acceptanceTemplate.allowedWritePaths to keep each agent on its own files; rows with disjoint paths can run in parallel.",
+      "Do NOT add `TASK_STATUS: completed` (or similar log-marker regexes) to acceptanceTemplate.requiredRegex / requiredReportRegex / requiredPaths.requiredRegex. Completion is determined by the structured task-report.json the worker submits, not by log markers; requiring such a marker only produces false negatives.",
+      "Do NOT list `task-report.json` or `worker.md` in acceptanceTemplate.requiredPaths — the supervisor writes those itself in the batch artifact directory, and they are not under the task's cwd.",
+      "Prefer `requireDeliverablesEvidence: true` and `minReportSummaryChars` in acceptanceTemplate to enforce real completion proof; pair them with `allowedWritePaths` to scope writes per row.",
       "Set synthesis.instructions when the root agent should summarize after the batch finishes.",
     ],
     parameters: TasksPlanParams,

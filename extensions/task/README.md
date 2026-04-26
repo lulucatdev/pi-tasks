@@ -108,11 +108,13 @@ The supervisor trusts `task-report.json`, not natural language claims or legacy 
 
 Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths.
 
+**Do not** add `TASK_STATUS: completed` (or similar log-marker regexes) as an acceptance requirement: V3 derives completion from the structured `task-report.json` the worker submits, and a missing log marker only produces false negatives. **Do not** list `task-report.json` or `worker.md` in `requiredPaths`: the supervisor writes those itself in the batch artifact directory, not under the task's cwd. Prefer `requireDeliverablesEvidence: true` and `minReportSummaryChars` to enforce real completion proof.
+
 Example:
 
 ```ts
 tasks({
-  concurrency: 8,
+  concurrency: 4,
   tasks: [{
     name: "stage9-ch05",
     prompt: "Process chapter 05...",
@@ -120,8 +122,9 @@ tasks({
       requiredPaths: [{ path: "Stage9/ch05_delivery.md", minBytes: 200 }],
       forbiddenPaths: ["ch05_delivery.md"],
       forbiddenOutputRegex: ["已开始|待执行|TODO"],
-      allowedWritePaths: ["Stage9/**", ".pi/tasks/**"],
-      requireDeliverablesEvidence: true
+      allowedWritePaths: ["Stage9/**"],
+      requireDeliverablesEvidence: true,
+      minReportSummaryChars: 80,
     }
   }]
 });

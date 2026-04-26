@@ -7,7 +7,7 @@ import type { EventEmitter } from "node:events";
 import type { AttemptPaths } from "./audit-log.ts";
 import { createWorkerActivityState, extractWorkerActivity } from "./thinking-steps.ts";
 import type { FailureKind, NormalizedTaskSpec, RuntimeOutcome, RuntimeStatus, TaskActivityItem, TaskAttemptRecord } from "./types.ts";
-import { workerEventsPathForAttempt } from "./worker-events.ts";
+import { appendWorkerEvent, createStdoutTelemetryState, extractStdoutTelemetry, workerEventsPathForAttempt } from "./worker-events.ts";
 import { buildWorkerPrompt, buildWorkerSystemPrompt } from "./worker-protocol.ts";
 
 const TASK_EXTENSION_ENTRYPOINT = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -86,7 +86,10 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
   let stdoutWriteQueue = Promise.resolve();
   let stderrWriteQueue = Promise.resolve();
   let activityQueue = Promise.resolve();
+  let telemetryQueue = Promise.resolve();
   const activityState = createWorkerActivityState();
+  const telemetryState = createStdoutTelemetryState();
+  const workerEventsPath = workerEventsPathForAttempt(input.paths.attemptDir);
 
   const queueAppend = (filePath: string, text: string, stream: "stdout" | "stderr") => {
     const append = () => fs.appendFile(filePath, text, "utf-8").catch((error) => {
@@ -102,13 +105,27 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     activityQueue = activityQueue.then(emit, emit);
   };
 
+  const queueTelemetryEvents = (events: ReturnType<typeof extractStdoutTelemetry>) => {
+    if (!events.length) return;
+    const emit = async () => {
+      for (const event of events) {
+        try {
+          await appendWorkerEvent(workerEventsPath, event);
+        } catch {
+          // Telemetry must not block worker execution; ignore artifact write errors.
+        }
+      }
+    };
+    telemetryQueue = telemetryQueue.then(emit, emit);
+  };
+
   await fs.mkdir(input.paths.attemptDir, { recursive: true });
   const systemPromptPath = path.join(input.paths.attemptDir, "system-prompt.md");
   await fs.writeFile(systemPromptPath, buildWorkerSystemPrompt(), "utf-8");
   await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
   await fs.writeFile(input.paths.stderrPath, "", "utf-8");
   await fs.writeFile(input.paths.stdoutPath, "", "utf-8");
-  await fs.writeFile(workerEventsPathForAttempt(input.paths.attemptDir), "", "utf-8");
+  await fs.writeFile(workerEventsPath, "", "utf-8");
 
   const args = ["--no-extensions", "--extension", TASK_EXTENSION_ENTRYPOINT, "--mode", "json", "-p", "--no-session"];
   if (input.fallbackModel) args.push("--model", input.fallbackModel);
@@ -126,7 +143,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       cwd: input.task.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...(input.env ?? process.env), PI_CHILD_TYPE: "task", PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPathForAttempt(input.paths.attemptDir) },
+      env: { ...(input.env ?? process.env), PI_CHILD_TYPE: "task", PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPath },
     });
   } catch (error) {
     const finishedAt = new Date().toISOString();
@@ -150,6 +167,8 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       const event = JSON.parse(line);
       const workerActivity = extractWorkerActivity(event, activityState, { taskId: input.task.id, attemptId: input.attemptId });
       if (workerActivity) queueActivity(workerActivity);
+      const telemetryEvents = extractStdoutTelemetry(event, telemetryState, { taskId: input.task.id, attemptId: input.attemptId, cwd: input.task.cwd });
+      if (telemetryEvents.length) queueTelemetryEvents(telemetryEvents);
       const terminal = isTerminalAssistantEvent(event);
       if (terminal.terminal) {
         sawTerminalAssistantMessage = true;
@@ -247,7 +266,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     });
   });
 
-  await Promise.all([stdoutWriteQueue, stderrWriteQueue, activityQueue]);
+  await Promise.all([stdoutWriteQueue, stderrWriteQueue, activityQueue, telemetryQueue]);
 
   const finishedAt = new Date().toISOString();
   const status: RuntimeStatus = wasAborted || stopReason === "aborted" ? "aborted" : stopReason === "error" || errorMessage ? "error" : sawTerminalAssistantMessage && exitCode === 0 ? "success" : exitCode === 0 ? "success" : "error";

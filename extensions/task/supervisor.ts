@@ -347,8 +347,13 @@ async function settleTask(input: {
   const workerReport = reportResult.ok
     ? { status: reportResult.report!.status, reportPath: paths.reportPath, report: reportResult.report, errors: [], warnings: [] }
     : { status: "invalid" as const, reportPath: paths.reportPath, errors: reportResult.errors, warnings: [] };
+  // Audit is "available" when we either captured a git baseline diff or observed at
+  // least one worker event from stdout telemetry. The latter proves we listened to the
+  // worker's tool calls, so an empty write set really means "no writes happened" rather
+  // than "we have no idea what the worker did."
+  const auditAvailable = changedFileAudit.available || workerEvents.length > 0 || telemetryWritePaths.length > 0;
   const acceptance = reportResult.ok && reportResult.report!.status === "completed"
-    ? await evaluateAcceptance({ contract: input.task.acceptance, cwd: input.task.cwd, workerLog, report: reportResult.report, changedFiles: [...input.writeAuditChangedFiles], writeAuditAvailable: changedFileAudit.available || telemetryWritePaths.length > 0 })
+    ? await evaluateAcceptance({ contract: input.task.acceptance, cwd: input.task.cwd, workerLog, report: reportResult.report, changedFiles: [...input.writeAuditChangedFiles], writeAuditAvailable: auditAvailable })
     : emptyAcceptance("skipped");
   const runtimeDecision = classifyAndDecide({ ...(runtime as RuntimeOutcome), error: runtime.error });
   const finalStatus = deriveTaskFinalStatus({ runtime: runtime.status, workerReport, acceptance });

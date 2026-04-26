@@ -44,7 +44,6 @@ export function buildRerunParams(input: BuildRerunInput): TasksToolParams & { pa
     concurrency: input.concurrency ?? Math.max(1, Math.min(input.detail.batch.effectiveConcurrency, selected.length || 1)),
     retry: input.originalParams?.retry,
     throttle: input.originalParams?.throttle,
-    audit: input.originalParams?.audit,
     acceptanceDefaults: input.originalParams?.acceptanceDefaults,
     parentBatchId: input.detail.batch.batchId,
     rerunOfTaskIds: selected.map((task) => task.taskId),

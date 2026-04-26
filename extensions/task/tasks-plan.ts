@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AcceptanceContract, AuditOptions, ParentRetryPolicy, PathCheck, TaskSpecInput, TasksToolParams, ThrottlePolicy } from "./types.ts";
+import type { AcceptanceContract, ParentRetryPolicy, PathCheck, TaskSpecInput, TasksToolParams, ThrottlePolicy } from "./types.ts";
 
 export const MAX_PLAN_ROWS = 100;
 export const MAX_PLAN_PROMPT_TEMPLATE_BYTES = 32_000;
@@ -39,7 +39,6 @@ export interface TasksPlanInput {
 	metadataTemplate?: Record<string, string>;
 	retry?: ParentRetryPolicy;
 	throttle?: ThrottlePolicy;
-	audit?: AuditOptions;
 	acceptanceDefaults?: AcceptanceContract;
 	synthesis?: TasksPlanSynthesis;
 	parentBatchId?: string;
@@ -236,7 +235,6 @@ export function expandTasksPlan(input: TasksPlanInput): ExpandedTasksPlan {
 	if (input.concurrency !== undefined) params.concurrency = input.concurrency;
 	if (input.retry) params.retry = input.retry;
 	if (input.throttle) params.throttle = input.throttle;
-	if (input.audit) params.audit = input.audit;
 	if (input.acceptanceDefaults) params.acceptanceDefaults = input.acceptanceDefaults;
 	if (input.parentBatchId) params.parentBatchId = input.parentBatchId;
 	if (input.rerunOfTaskIds) params.rerunOfTaskIds = input.rerunOfTaskIds;
