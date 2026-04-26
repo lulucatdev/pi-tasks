@@ -28,8 +28,8 @@ export interface AttemptRuntimeResult {
 }
 
 export type SpawnedProcessLike = Pick<ChildProcessWithoutNullStreams, "kill" | "on"> & {
-  stdout: Pick<EventEmitter, "on">;
-  stderr: Pick<EventEmitter, "on">;
+  stdout: Pick<EventEmitter, "on"> & { destroy?: () => void };
+  stderr: Pick<EventEmitter, "on"> & { destroy?: () => void };
 };
 
 export type SpawnImpl = (command: string, args: string[], options: Record<string, unknown>) => SpawnedProcessLike;
@@ -47,6 +47,7 @@ export interface RunWorkerAttemptInput {
   env?: NodeJS.ProcessEnv;
   abortKillDelayMs?: number;
   terminalExitGraceMs?: number;
+  postExitGraceMs?: number;
   onActivity?: (activity: TaskActivityItem) => void | Promise<void>;
 }
 
@@ -62,6 +63,11 @@ function isTerminalAssistantEvent(event: unknown): { terminal: boolean; stopReas
 
 function tail(text: string, max = 4000): string {
   return text.length <= max ? text : text.slice(text.length - max);
+}
+
+function destroyUnendedStdio(proc: SpawnedProcessLike): void {
+  try { proc.stdout.destroy?.(); } catch {}
+  try { proc.stderr.destroy?.(); } catch {}
 }
 
 export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<AttemptRuntimeResult> {
@@ -160,6 +166,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     let settled = false;
     let abortTimer: NodeJS.Timeout | undefined;
     let terminalTimer: NodeJS.Timeout | undefined;
+    let postExitTimer: NodeJS.Timeout | undefined;
     let abortHandler: (() => void) | undefined;
 
     const finish = (code: number) => {
@@ -167,6 +174,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       settled = true;
       if (abortTimer) clearTimeout(abortTimer);
       if (terminalTimer) clearTimeout(terminalTimer);
+      if (postExitTimer) clearTimeout(postExitTimer);
       if (input.signal && abortHandler) input.signal.removeEventListener("abort", abortHandler);
       resolve(code);
     };
@@ -220,6 +228,17 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       stderr += error.message;
       queueAppend(input.paths.stderrPath, error.message, "stderr");
       finish(1);
+    });
+
+    proc.on("exit", (code: number | null) => {
+      if (settled) return;
+      const exitCode = code ?? 0;
+      postExitTimer = setTimeout(() => {
+        if (stdoutBuffer.trim()) parseLine(stdoutBuffer);
+        destroyUnendedStdio(proc);
+        finish(exitCode);
+      }, input.postExitGraceMs ?? 8000);
+      postExitTimer.unref?.();
     });
 
     proc.on("close", (code: number | null) => {

@@ -102,8 +102,22 @@ function modelId(ctx: ExtensionContext): string | undefined {
   return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 
+function buildStartingText(params: TasksToolParams, ctx: ExtensionContext): string {
+  const total = Array.isArray(params.tasks) ? params.tasks.length : 0;
+  return [
+    `TASKS starting: preparing ${total} task${total === 1 ? "" : "s"}`,
+    `Cwd: ${ctx.cwd}`,
+    "Next: creating batch artifacts and launching workers",
+  ].join("\n");
+}
+
 async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
   if (toolName === "tasks") validateTasksFanoutUsage(params);
+  onUpdate?.({
+    content: [{ type: "text", text: buildStartingText(params, ctx) }],
+    details: { status: "starting", total: Array.isArray(params.tasks) ? params.tasks.length : 0, cwd: ctx.cwd },
+    isError: false,
+  });
   const result = await executeSupervisedTasks(params, {
     cwd: ctx.cwd,
     toolName,
@@ -208,7 +222,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : buildResultText({ batchId: "unknown", batchDir: "unknown", status: "incomplete", total: 0, success: 0, error: 0, aborted: 0 });
-      const color = text.startsWith("TASKS running") ? "warning" : result.isError ? "error" : "success";
+      const color = text.startsWith("TASKS running") || text.startsWith("TASKS starting") ? "warning" : result.isError ? "error" : "success";
       return new Text(theme.fg(color, text), 0, 0);
     },
   });
@@ -234,7 +248,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _opts, theme) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "(no task result)";
-      const color = text.startsWith("TASKS running") ? "warning" : result.isError ? "error" : "success";
+      const color = text.startsWith("TASKS running") || text.startsWith("TASKS starting") ? "warning" : result.isError ? "error" : "success";
       return new Text(theme.fg(color, text), 0, 0);
     },
   });

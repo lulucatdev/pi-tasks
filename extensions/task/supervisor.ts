@@ -56,6 +56,7 @@ export interface SupervisorDependencies {
 	sleep?: (ms: number) => Promise<void>;
 	random?: () => number;
 	onUpdate?: (snapshot: SupervisedTasksResult) => void;
+	liveUpdateIntervalMs?: number;
 }
 
 export interface SupervisedTasksResult {
@@ -104,15 +105,28 @@ function compactTaskLines(task: TaskArtifact): string[] {
   return lines;
 }
 
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function buildLiveResultText(batch: BatchArtifact, tasks: TaskArtifact[]): string {
   const counts = countLifecycle(tasks);
+  const startedMs = Date.parse(batch.startedAt);
+  const elapsed = Number.isNaN(startedMs) ? undefined : formatElapsed(Date.now() - startedMs);
   return [
     `TASKS running: ${counts.done}/${tasks.length} done, ${counts.running} running, ${counts.queued} queued`,
+    elapsed ? `Elapsed: ${elapsed}` : undefined,
     `Batch: ${batch.batchId}`,
     `Artifacts: ${batch.batchDir}`,
     `Inspect: /tasks-ui ${batch.batchId}`,
     ...tasks.flatMap(compactTaskLines),
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 async function readTaskArtifacts(batch: AuditBatchHandle): Promise<TaskArtifact[]> {
@@ -128,6 +142,14 @@ async function emitSupervisorUpdate(batch: AuditBatchHandle, deps: SupervisorDep
   } catch {
     // Live UI must never interfere with task supervision or artifact writes.
   }
+}
+
+function startSupervisorHeartbeat(batch: AuditBatchHandle, deps: SupervisorDependencies): () => void {
+  if (!deps.onUpdate) return () => undefined;
+  const intervalMs = Math.max(1, deps.liveUpdateIntervalMs ?? 2000);
+  const timer = setInterval(() => void emitSupervisorUpdate(batch, deps), intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 function hasWriteBoundary(task: NormalizedTaskSpec): boolean {
@@ -385,8 +407,11 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const throttle = new ThrottleController(normalizeThrottlePolicy(params.throttle, schedulingConcurrency), schedulingConcurrency);
   await emitSupervisorUpdate(batch, deps);
+  const stopHeartbeat = startSupervisorHeartbeat(batch, deps);
 
-  const taskResults = await mapWithDynamicConcurrency(normalized.tasks, () => throttle.currentConcurrency, async (task) => {
+  let taskResults: TaskArtifact[];
+  try {
+    taskResults = await mapWithDynamicConcurrency(normalized.tasks, () => throttle.currentConcurrency, async (task) => {
     try {
       if (ctx.signal?.aborted) {
         const aborted = await abortQueuedTask({ batch, task, nextSeq, now: deps.now });
@@ -444,7 +469,10 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
       await emitSupervisorUpdate(batch, deps);
       return failed;
     }
-  });
+    });
+  } finally {
+    stopHeartbeat();
+  }
 
   const summary = summarizeTasks(taskResults);
   const status = terminalBatchStatus(summary);

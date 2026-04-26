@@ -55,6 +55,31 @@ test("runWorkerAttempt captures terminal assistant events and stdout/stderr arti
   assert.equal(await fs.readFile(paths.stderrPath, "utf-8"), "warn");
 });
 
+test("runWorkerAttempt resolves when process exits before stdio close", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-post-exit-guard-"));
+  const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";
+  const result = await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths: makePaths(root),
+    postExitGraceMs: 1,
+    spawnImpl: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => true;
+      setImmediate(() => {
+        proc.stdout.emit("data", terminal);
+        proc.emit("exit", 0);
+      });
+      return proc;
+    },
+  });
+
+  assert.equal(result.status, "success");
+});
+
 test("runWorkerAttempt stops workers that stay open after terminal output", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-terminal-guard-"));
   const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";

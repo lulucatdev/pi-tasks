@@ -114,6 +114,26 @@ test("executeSupervisedTasks emits live updates while tasks run", async () => {
   assert.ok(events.some((event) => event.type === "task_activity" && event.data?.label === "Inspect one"));
 });
 
+test("executeSupervisedTasks emits heartbeat updates during quiet workers", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-heartbeat-"));
+  const updates = [];
+  const result = await executeSupervisedTasks({
+    tasks: [{ name: "quiet", prompt: "Be quiet" }],
+    concurrency: 1,
+  }, { cwd: root, toolName: "tasks" }, {
+    onUpdate: (snapshot) => updates.push(snapshot),
+    liveUpdateIntervalMs: 5,
+    runAttempt: async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.status, "success");
+  assert.ok(updates.length >= 4);
+  assert.ok(updates.some((snapshot) => snapshot.text.includes("Elapsed:")));
+});
+
 test("executeSupervisedTasks creates batch artifacts before cwd launch failures", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-invalid-cwd-"));
   const updates = [];
