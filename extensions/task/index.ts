@@ -131,12 +131,20 @@ function modelId(ctx: ExtensionContext): string | undefined {
   return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 
+function captureThinkingLevel(pi: ExtensionAPI): string | undefined {
+  try {
+    const level = pi.getThinkingLevel?.();
+    if (typeof level === "string" && level.trim()) return level;
+  } catch {}
+  return undefined;
+}
+
 function buildStartingText(params: TasksToolParams, _ctx: ExtensionContext): string {
   const total = Array.isArray(params.tasks) ? params.tasks.length : 0;
   return `TASKS starting · preparing ${total} task${total === 1 ? "" : "s"}`;
 }
 
-async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
+async function runTasks(pi: ExtensionAPI, params: TasksToolParams, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext, toolName: "task" | "tasks") {
   if (toolName === "tasks") {
     validateTasksFanoutUsage(params);
     enforceInlineTasksLimit(params);
@@ -151,6 +159,7 @@ async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined
     toolName,
     signal,
     model: modelId(ctx),
+    thinking: captureThinkingLevel(pi),
   }, {
     onUpdate: (snapshot) => onUpdate?.({
       content: [{ type: "text", text: snapshot.text }],
@@ -165,7 +174,7 @@ async function runTasks(params: TasksToolParams, signal: AbortSignal | undefined
   };
 }
 
-async function runTasksPlan(params: TasksPlanInput, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext) {
+async function runTasksPlan(pi: ExtensionAPI, params: TasksPlanInput, signal: AbortSignal | undefined, onUpdate: ((partialResult: any) => void) | undefined, ctx: ExtensionContext) {
   validateTasksPlanInput(params);
   const expansion = expandTasksPlan(params);
   onUpdate?.({
@@ -178,6 +187,7 @@ async function runTasksPlan(params: TasksPlanInput, signal: AbortSignal | undefi
     toolName: "tasks",
     signal,
     model: modelId(ctx),
+    thinking: captureThinkingLevel(pi),
   }, {
     onUpdate: (snapshot) => onUpdate?.({
       content: [{ type: "text", text: snapshot.text }],
@@ -277,7 +287,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     parameters: TaskParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const { name, prompt, cwd, acceptance, metadata, concurrency, retry, throttle } = params as any;
-      return runTasks({ tasks: [{ name, prompt, cwd, acceptance, metadata }], concurrency, retry, throttle }, signal, onUpdate, ctx, "task");
+      return runTasks(pi, { tasks: [{ name, prompt, cwd, acceptance, metadata }], concurrency, retry, throttle }, signal, onUpdate, ctx, "task");
     },
     renderCall(args, theme) {
       return new Text(`${theme.fg("toolTitle", theme.bold("task "))}${theme.fg("accent", String((args as any).name ?? "task"))}`, 0, 0);
@@ -307,7 +317,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     ],
     parameters: TasksParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      return runTasks(params as TasksToolParams, signal, onUpdate, ctx, "tasks");
+      return runTasks(pi, params as TasksToolParams, signal, onUpdate, ctx, "tasks");
     },
     renderCall(args, theme) {
       const taskCount = Array.isArray((args as any).tasks) ? (args as any).tasks.length : 0;
@@ -342,7 +352,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     ],
     parameters: TasksPlanParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      return runTasksPlan(params as unknown as TasksPlanInput, signal, onUpdate, ctx);
+      return runTasksPlan(pi, params as unknown as TasksPlanInput, signal, onUpdate, ctx);
     },
     renderCall(args, theme) {
       const matrix = Array.isArray((args as any).matrix) ? (args as any).matrix : [];

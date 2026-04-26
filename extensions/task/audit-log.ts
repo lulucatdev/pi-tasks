@@ -40,6 +40,8 @@ export interface CreateBatchInput {
   effectiveConcurrency: number;
   batchId?: string;
   now?: string;
+  defaultModel?: string;
+  defaultThinking?: string;
 }
 
 export interface AuditBatchHandle extends BatchPaths {
@@ -114,6 +116,8 @@ export function buildBatchArtifact(input: {
   effectiveConcurrency: number;
   initialized?: boolean;
   auditIntegrity?: AuditIntegrity;
+  defaultModel?: string;
+  defaultThinking?: string;
 }): BatchArtifact {
   return {
     schemaVersion: 1,
@@ -130,6 +134,8 @@ export function buildBatchArtifact(input: {
     requestedConcurrency: input.requestedConcurrency,
     effectiveConcurrency: input.effectiveConcurrency,
     summary: emptyBatchSummary(input.taskIds.length),
+    defaultModel: input.defaultModel,
+    defaultThinking: input.defaultThinking,
   };
 }
 
@@ -232,6 +238,8 @@ export async function createBatch(input: CreateBatchInput): Promise<AuditBatchHa
     taskIds,
     requestedConcurrency: input.requestedConcurrency,
     effectiveConcurrency: input.effectiveConcurrency,
+    defaultModel: input.defaultModel,
+    defaultThinking: input.defaultThinking,
   });
   await writeBatchArtifact(paths, artifact);
   await appendBatchEvent(paths.eventsPath, { schemaVersion: 1, seq: 1, at: now, type: "batch_started", batchId });

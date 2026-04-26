@@ -260,6 +260,8 @@ export interface BatchArtifact {
   requestedConcurrency: number;
   effectiveConcurrency: number;
   summary: BatchSummary;
+  defaultModel?: string;
+  defaultThinking?: string;
 }
 
 export interface DeriveTaskStatusInput {

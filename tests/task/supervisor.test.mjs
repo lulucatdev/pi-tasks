@@ -449,6 +449,35 @@ test("executeSupervisedTasks final result text shows the per-task table with fin
   assert.match(result.text, /rerun failed: \/tasks-ui rerun failed /);
 });
 
+test("executeSupervisedTasks renders per-task model/thinking meta and a thinking tree for failed tasks", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-meta-"));
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { id: "ch01", name: "ch01", prompt: "do" },
+      { id: "ch02", name: "ch02", prompt: "do" },
+    ],
+    concurrency: 2,
+    retry: { maxAttempts: 1 },
+  }, { cwd: root, toolName: "tasks", model: "anthropic/claude-opus-4-7", thinking: "xhigh" }, {
+    runAttempt: async (input) => {
+      await input.onActivity?.({ at: "2026-04-26T00:00:00.500Z", taskId: input.task.id, attemptId: input.attemptId, kind: "tool", label: `Edit ${input.task.id}.tex` });
+      await input.onActivity?.({ at: "2026-04-26T00:00:01.500Z", taskId: input.task.id, attemptId: input.attemptId, kind: "tool", label: `Verify ${input.task.id}` });
+      return input.task.id === "ch02" ? failingAttempt(input) : successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.defaultModel, "anthropic/claude-opus-4-7");
+  assert.equal(result.batch.defaultThinking, "xhigh");
+  assert.match(result.text, /◊ anthropic\/claude-opus-4-7\/xhigh/);
+  // Failed task gets a thinking-steps tree
+  assert.match(result.text, /┆ Thinking Steps · Summary/);
+  assert.match(result.text, /├─ /);
+  assert.match(result.text, /└─ /);
+  // Successful tasks omit the tree (only a single line)
+  const ch01Line = result.text.split("\n").find((line) => /✓ {2}ch01/.test(line));
+  assert.ok(ch01Line, "ch01 should have a status line");
+});
+
 test("executeSupervisedTasks final result text uses 'done' verb when every task succeeds", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-final-done-"));
   const result = await executeSupervisedTasks({

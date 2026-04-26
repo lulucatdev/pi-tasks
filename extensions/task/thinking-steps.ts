@@ -13,7 +13,7 @@ export interface WorkerActivityContext {
   now?: () => string;
 }
 
-type ActivityRole = "inspect" | "plan" | "compare" | "verify" | "write" | "search" | "error" | "default";
+export type ActivityRole = "inspect" | "plan" | "compare" | "verify" | "write" | "search" | "error" | "default";
 
 const HEADING_RE = /^\s{0,3}#{1,6}\s+/;
 const LIST_ITEM_RE = /^\s*(?:[-*+]\s+|\d+[.)]\s+|[a-z][.)]\s+)/i;
@@ -198,7 +198,7 @@ function inferActivityRole(item: TaskActivityItem): ActivityRole {
   return "default";
 }
 
-function iconForActivity(item: TaskActivityItem): string {
+export function iconForActivity(item: TaskActivityItem): string {
   switch (inferActivityRole(item)) {
     case "inspect": return "◫";
     case "plan": return "◇";
@@ -211,8 +211,12 @@ function iconForActivity(item: TaskActivityItem): string {
   }
 }
 
-function activitySummary(item: TaskActivityItem): string {
+export function activitySummary(item: TaskActivityItem): string {
   return truncate(stripAnsiAndControl(collapseWhitespace(item.label)), 96);
+}
+
+export function activityRole(item: TaskActivityItem): ActivityRole {
+  return inferActivityRole(item);
 }
 
 export function renderActivityCollapsedLine(item: TaskActivityItem): string {

@@ -18,6 +18,7 @@ import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } f
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
+import { activityRole, activitySummary, iconForActivity, renderActivitySummaryLines, type ActivityRole } from "./thinking-steps.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   deriveTaskFinalStatus,
@@ -149,6 +150,17 @@ function taskBody(task: TaskArtifact): string {
   return task.status === "queued" ? "" : "…";
 }
 
+const TREE_INDENT = "   ";
+const TREE_MAX_ITEMS = 5;
+
+function shouldShowTree(task: TaskArtifact): boolean {
+  const finalStatus = task.finalStatus;
+  if (finalStatus === "success") return false;
+  if (finalStatus === "error" || finalStatus === "aborted") return Boolean(task.activity?.length);
+  // Mid-flight: show tree when a running task has any activity yet.
+  return task.status === "running" && Boolean(task.activity?.length);
+}
+
 function compactTaskLine(task: TaskArtifact, idWidth: number): string {
   const icon = statusIcon(task);
   const truncated = task.taskId.length > idWidth ? truncate(task.taskId, idWidth) : task.taskId;
@@ -156,6 +168,39 @@ function compactTaskLine(task: TaskArtifact, idWidth: number): string {
   if (!body) return `${icon}  ${truncated}`;
   const padded = truncated.padEnd(idWidth, " ");
   return `${icon}  ${padded}  ${body}`;
+}
+
+function taskMetaLine(task: TaskArtifact, batch: BatchArtifact): string | undefined {
+  // Per-task model + thinking, separated by '/'. Defaults to whatever the supervisor
+  // captured from the parent pi process; we still render every task so audit shows
+  // exactly what each agent ran on.
+  const taskModel = task.metadata?.model ?? batch.defaultModel;
+  const taskThinking = task.metadata?.thinking ?? batch.defaultThinking;
+  const parts = [taskModel, taskThinking].filter((value): value is string => Boolean(value && value.trim()));
+  if (parts.length === 0) return undefined;
+  return `${TREE_INDENT}◊ ${parts.join("/")}`;
+}
+
+function compactTaskBlock(task: TaskArtifact, idWidth: number, batch: BatchArtifact): string[] {
+  const lines = [compactTaskLine(task, idWidth)];
+  const meta = taskMetaLine(task, batch);
+  if (meta) lines.push(meta);
+  if (shouldShowTree(task)) {
+    lines.push(...renderActivitySummaryLines(task.activity ?? [], { maxItems: TREE_MAX_ITEMS, header: true, indent: TREE_INDENT }));
+  }
+  return lines;
+}
+
+function interleaveTaskBlocks(blocks: string[][]): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!;
+    const previousHadTree = index > 0 && (blocks[index - 1]?.length ?? 0) > 1;
+    const currentHasTree = block.length > 1;
+    if (out.length && (previousHadTree || currentHasTree)) out.push("");
+    out.push(...block);
+  }
+  return out;
 }
 
 function formatElapsed(ms: number): string {
@@ -206,11 +251,11 @@ function snapshotHeading(batch: BatchArtifact, tasks: TaskArtifact[], mode: Snap
 
 function buildSnapshotText(batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode, extras: string[] = []): string {
   const idWidth = tasks.length === 0 ? 4 : Math.max(4, ...tasks.map((task) => Math.min(task.taskId.length, 20)));
-  const taskLines = tasks.map((task) => compactTaskLine(task, idWidth));
+  const blocks = tasks.map((task) => compactTaskBlock(task, idWidth, batch));
   const lines: string[] = [snapshotHeading(batch, tasks, mode)];
-  if (taskLines.length) {
+  if (blocks.length) {
     lines.push("");
-    lines.push(...taskLines);
+    lines.push(...interleaveTaskBlocks(blocks));
   }
   lines.push("");
   lines.push(`/tasks-ui ${batch.batchId}`);
@@ -247,6 +292,50 @@ function colorTaskLine(theme: SnapshotTheme, task: TaskArtifact, idWidth: number
   return `${icon}  ${paint(theme, role.idRole, truncated)}${padding}  ${paint(theme, role.bodyRole, body)}`;
 }
 
+function colorActivityRoleColor(role: ActivityRole): string {
+  switch (role) {
+    case "verify": return "success";
+    case "write": return "accent";
+    case "plan": return "info";
+    case "compare": return "info";
+    case "error": return "error";
+    case "search": return "muted";
+    case "inspect": return "muted";
+    default: return "muted";
+  }
+}
+
+function colorActivityTreeLines(theme: SnapshotTheme, items: TaskActivityItem[]): string[] {
+  const visible = items.slice(-TREE_MAX_ITEMS);
+  if (visible.length === 0) return [];
+  const lines: string[] = [];
+  lines.push(`${TREE_INDENT}${paint(theme, "muted", "┆ Thinking Steps · Summary")}`);
+  for (let index = 0; index < visible.length; index += 1) {
+    const item = visible[index]!;
+    const connector = index === visible.length - 1 ? "└─" : "├─";
+    const role = activityRole(item);
+    const iconRole = colorActivityRoleColor(role);
+    const icon = iconForActivity(item);
+    const summary = activitySummary(item);
+    lines.push(`${TREE_INDENT}${paint(theme, "muted", connector)} ${paint(theme, iconRole, icon)} ${paint(theme, "muted", summary)}`);
+  }
+  return lines;
+}
+
+function colorTaskMetaLine(theme: SnapshotTheme, task: TaskArtifact, batch: BatchArtifact): string | undefined {
+  const plain = taskMetaLine(task, batch);
+  if (!plain) return undefined;
+  return `${TREE_INDENT}${paint(theme, "muted", plain.slice(TREE_INDENT.length))}`;
+}
+
+function colorTaskBlock(theme: SnapshotTheme, task: TaskArtifact, idWidth: number, batch: BatchArtifact): string[] {
+  const lines = [colorTaskLine(theme, task, idWidth)];
+  const meta = colorTaskMetaLine(theme, task, batch);
+  if (meta) lines.push(meta);
+  if (shouldShowTree(task)) lines.push(...colorActivityTreeLines(theme, task.activity ?? []));
+  return lines;
+}
+
 function colorHeading(theme: SnapshotTheme, batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode): string {
   const counts = countLifecycle(tasks);
   const elapsed = snapshotElapsed(batch, mode);
@@ -281,11 +370,11 @@ function colorExtra(theme: SnapshotTheme, extra: string): string {
 
 export function renderColoredSnapshot(theme: SnapshotTheme, batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode, extras: string[] = []): string {
   const idWidth = tasks.length === 0 ? 4 : Math.max(4, ...tasks.map((task) => Math.min(task.taskId.length, 20)));
-  const taskLines = tasks.map((task) => colorTaskLine(theme, task, idWidth));
+  const blocks = tasks.map((task) => colorTaskBlock(theme, task, idWidth, batch));
   const lines: string[] = [colorHeading(theme, batch, tasks, mode)];
-  if (taskLines.length) {
+  if (blocks.length) {
     lines.push("");
-    lines.push(...taskLines);
+    lines.push(...interleaveTaskBlocks(blocks));
   }
   lines.push("");
   lines.push(paint(theme, "muted", `/tasks-ui ${batch.batchId}`));
@@ -633,6 +722,8 @@ export async function executeSupervisedTasks(params: TasksToolParams, ctx: Super
     requestedConcurrency: normalized.requestedConcurrency,
     effectiveConcurrency: schedulingConcurrency,
     now: deps.now?.(),
+    defaultModel: ctx.model,
+    defaultThinking: ctx.thinking,
   });
   let seq = normalized.tasks.length + 2;
   const nextSeq = () => seq++;
