@@ -20,7 +20,7 @@ export function normalizeThrottlePolicy(policy: ThrottlePolicy | undefined, requ
   const maxConcurrency = Math.max(1, Math.min(policy?.maxConcurrency ?? cap, cap));
   const minConcurrency = Math.max(1, Math.min(policy?.minConcurrency ?? 1, maxConcurrency));
   return {
-    enabled: policy?.enabled ?? true,
+    enabled: policy?.enabled === true,
     minConcurrency,
     maxConcurrency,
     transientFailureThreshold: policy?.transientFailureThreshold ?? 0.2,

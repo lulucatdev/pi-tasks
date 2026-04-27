@@ -142,6 +142,8 @@ type TasksPlanInput = {
 
 `tasks_plan` is the primary fan-out transport. The extension validates the input, expands the matrix locally into N full `TaskSpecInput`s, and calls `executeSupervisedTasks` with the same artifact/audit/acceptance/retry/throttle behavior as `tasks`. It additionally writes `plan.json` next to `batch.json`.
 
+Concurrency is caller-controlled. If `concurrency` is omitted, there is no hidden supervisor cap: the scheduler starts all supplied leaf tasks concurrently (`tasks.length` or `matrix.length`). `concurrency: N` is an explicit local cap only. Dynamic throttling is opt-in (`throttle.enabled: true`); without it, the supervisor does not auto-reduce concurrency after failures. Root agents should split large jobs into multiple `tasks_plan` waves when they want phased execution or manual provider load control.
+
 ## `tasks_plan`
 
 ### Why it exists

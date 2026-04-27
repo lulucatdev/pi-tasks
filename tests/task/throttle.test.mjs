@@ -24,6 +24,12 @@ test("normalizeThrottlePolicy clamps min and max concurrency to the supplied eff
   assert.equal(policy.minConcurrency, 64);
 });
 
+test("normalizeThrottlePolicy keeps dynamic throttling disabled unless explicitly enabled", () => {
+  const policy = normalizeThrottlePolicy(undefined, 12);
+  assert.equal(policy.enabled, false);
+  assert.equal(policy.maxConcurrency, 12);
+});
+
 test("ThrottleController recovers concurrency after stable windows", () => {
   const throttle = new ThrottleController(normalizeThrottlePolicy({ enabled: true, minConcurrency: 1, maxConcurrency: 4, transientFailureThreshold: 0.5, windowSize: 2 }, 4), 2);
   throttle.record("none");

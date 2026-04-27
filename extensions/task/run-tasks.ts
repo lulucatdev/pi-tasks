@@ -3,8 +3,7 @@ import { generateTaskIds } from "./audit-log.ts";
 import type { AcceptanceContract, NormalizedTaskSpec, TaskSpecInput, TasksToolParams } from "./types.ts";
 
 export const DEFAULT_MAX_TASKS = 100;
-export const DEFAULT_CONCURRENCY = 8;
-export const HARD_MAX_CONCURRENCY = 64;
+export const DEFAULT_CONCURRENCY = Number.POSITIVE_INFINITY; // normalized to the supplied task count
 export const MAX_INLINE_TASKS = 4;
 export const MAX_INLINE_PROMPT_BYTES = 8_000;
 
@@ -87,7 +86,7 @@ export function validateTasksFanoutUsage(params: TasksToolParams): void {
   if (params.tasks.length !== 1) return;
   const task = params.tasks[0]!;
   const meta = looksLikeMetaFanoutTask(task);
-  const requestedConcurrency = params.concurrency ?? DEFAULT_CONCURRENCY;
+  const requestedConcurrency = params.concurrency ?? params.tasks.length;
   if (!meta.matched && requestedConcurrency <= 1) return;
   const expected = meta.requestedCount ?? (requestedConcurrency > 1 ? requestedConcurrency : undefined);
   throw new Error([
@@ -118,11 +117,11 @@ export function enforceInlineTasksLimit(params: TasksToolParams, limits: InlineT
   throw new Error([
     `tasks rejected: ${params.tasks.length} task${params.tasks.length === 1 ? "" : "s"} (limit ${limits.maxTasks}), ${totalBytes} prompt bytes (limit ${limits.maxPromptBytes}).`,
     "Inline tasks() is reserved for tiny ad-hoc batches. For repeated or templated fan-out (every chapter, every report, every file), use tasks_plan with a small matrix + promptTemplate so the model never has to stream a huge tool-call argument.",
-    "Example: tasks_plan({ batchName: \"...\", concurrency: N, matrix: [{ id, vars }, ...], promptTemplate: \"...\", acceptanceTemplate: { ... } }).",
+    "Example: tasks_plan({ batchName: \"...\", matrix: [{ id, vars }, ...], promptTemplate: \"...\", acceptanceTemplate: { ... } }). Add concurrency only when you intentionally want a local cap.",
   ].join(" "));
 }
 
-export function normalizeTasksRun(params: TasksToolParams, defaultCwd: string, maxConcurrency = HARD_MAX_CONCURRENCY): NormalizedTasksRun {
+export function normalizeTasksRun(params: TasksToolParams, defaultCwd: string, maxConcurrency = Number.POSITIVE_INFINITY): NormalizedTasksRun {
   validateTasksToolParams(params);
   const generatedIds = generateTaskIds(params.tasks.length);
   const seen = new Set<string>();
@@ -140,7 +139,7 @@ export function normalizeTasksRun(params: TasksToolParams, defaultCwd: string, m
       metadata: task.metadata,
     };
   });
-  const requestedConcurrency = params.concurrency ?? DEFAULT_CONCURRENCY;
+  const requestedConcurrency = params.concurrency ?? tasks.length;
   const effectiveConcurrency = Math.max(1, Math.min(requestedConcurrency, maxConcurrency, tasks.length));
   return { tasks, requestedConcurrency, effectiveConcurrency };
 }

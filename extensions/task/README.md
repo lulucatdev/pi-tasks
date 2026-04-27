@@ -61,6 +61,13 @@ type TasksPlanInput = {
 };
 ```
 
+## Concurrency semantics
+
+- There is no hidden default concurrency cap. If `concurrency` is omitted, the supervisor starts all supplied leaf tasks concurrently (`tasks.length` or `matrix.length`).
+- Set `concurrency: N` only when you want an explicit local cap for that batch.
+- Dynamic throttling is opt-in: set `throttle: { enabled: true, ... }` to let the supervisor reduce/recover concurrency after transient provider/session failures. When `throttle` is omitted, the supervisor does not auto-throttle.
+- Agent-driven waves are preferred: split a large job into multiple `tasks_plan` calls when you want phases, dependency boundaries, or manual provider load control.
+
 ### `tasks_plan` template rules
 
 - `{{key}}` lookups resolve in this order: row.id, row.name, row.cwd, row.vars.

@@ -36,6 +36,18 @@ test("validateTasksFanoutUsage rejects one meta-task when fan-out was intended a
     concurrency: 1,
     tasks: [{ name: "single repair", prompt: "Fix this one chapter only." }],
   }));
+  assert.doesNotThrow(() => validateTasksFanoutUsage({
+    tasks: [{ name: "single repair", prompt: "Fix this one chapter only." }],
+  }));
+});
+
+test("normalizeTasksRun defaults concurrency to all supplied tasks", () => {
+  const normalized = normalizeTasksRun({
+    tasks: Array.from({ length: 12 }, (_value, index) => ({ name: `task-${index}`, prompt: "Do it" })),
+  }, "/tmp/project");
+
+  assert.equal(normalized.requestedConcurrency, 12);
+  assert.equal(normalized.effectiveConcurrency, 12);
 });
 
 test("normalizeTasksRun creates batch-local ids, resolves cwd, merges acceptance defaults, and clamps concurrency", () => {

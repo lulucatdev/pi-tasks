@@ -57,7 +57,7 @@ const RetrySchema = Type.Object({
 });
 
 const ThrottleSchema = Type.Object({
-  enabled: Type.Optional(Type.Boolean()),
+  enabled: Type.Optional(Type.Boolean({ description: "Dynamic failure-aware throttling is off by default; set true to let the supervisor reduce/recover concurrency after transient failures." })),
   minConcurrency: Type.Optional(Type.Number()),
   maxConcurrency: Type.Optional(Type.Number()),
   transientFailureThreshold: Type.Optional(Type.Number()),
@@ -81,14 +81,14 @@ const TaskParams = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Optional working directory override" })),
   acceptance: Type.Optional(AcceptanceSchema),
   metadata: Type.Optional(MetadataSchema),
-  concurrency: Type.Optional(Type.Number({ description: "Requested concurrency for this single-task batch" })),
+  concurrency: Type.Optional(Type.Number({ description: "Explicit concurrency cap. When omitted, the supervisor applies no hidden cap and runs all supplied tasks concurrently." })),
   retry: Type.Optional(RetrySchema),
   throttle: Type.Optional(ThrottleSchema),
 });
 
 const TasksParams = Type.Object({
   tasks: Type.Array(TaskItemSchema, { description: "Task specs to launch under one supervised batch.", minItems: 1, maxItems: MAX_TASKS }),
-  concurrency: Type.Optional(Type.Number({ description: "Requested batch concurrency" })),
+  concurrency: Type.Optional(Type.Number({ description: "Explicit concurrency cap. When omitted, the supervisor applies no hidden cap and runs all supplied tasks concurrently." })),
   retry: Type.Optional(RetrySchema),
   throttle: Type.Optional(ThrottleSchema),
   acceptanceDefaults: Type.Optional(AcceptanceSchema),
@@ -107,7 +107,7 @@ const TasksPlanRowSchema = Type.Object({
 
 const TasksPlanParams = Type.Object({
   batchName: Type.String({ description: "Short batch label, used in default task names and stored in plan.json." }),
-  concurrency: Type.Optional(Type.Number({ description: "Requested batch concurrency. Tasks with disjoint allowedWritePaths run truly in parallel; declare overlapping zones only when you intentionally want one task at a time." })),
+  concurrency: Type.Optional(Type.Number({ description: "Explicit concurrency cap. When omitted, all matrix rows run concurrently. Tasks with disjoint allowedWritePaths run truly in parallel; split the matrix into waves yourself when you want phased execution." })),
   matrix: Type.Array(TasksPlanRowSchema, { minItems: 1, maxItems: MAX_TASKS, description: "One row per leaf task. Keep rows compact: id + per-row vars only." }),
   promptTemplate: Type.String({ description: "Prompt template with {{key}} placeholders. Substituted per row using row.id, row.name, row.cwd, and row.vars." }),
   nameTemplate: Type.Optional(Type.String({ description: "Optional task name template (default: '{{batchName}} {{id}}')." })),
@@ -312,6 +312,7 @@ export default function taskExtension(pi: ExtensionAPI) {
       "Prefer tasks_plan over tasks for any repeated/templated fan-out (every chapter, every report, every file).",
       "tasks accepts at most 4 inline tasks and rejects payloads larger than 8000 prompt bytes; oversized inline calls fail fast and point you to tasks_plan.",
       "For N>4 agents, never inline N full prompts as JSON. Use tasks_plan with a matrix + promptTemplate so the model never has to stream a giant tool-call argument.",
+      "Do not add concurrency unless you intentionally want to cap this batch; omitted concurrency means all supplied tasks run concurrently.",
       "Give every task a clear name and prompt; use acceptance contracts for required files, regexes, and write boundaries.",
       "The root agent remains responsible for synthesis and for reading batch artifacts when needed.",
     ],
@@ -342,6 +343,7 @@ export default function taskExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use tasks_plan whenever the same prompt shape repeats across many items (chapters, reports, files, modules, tickets).",
       "Keep matrix rows tiny: id + per-row vars only. Put long shared instructions in promptTemplate, not per row.",
+      "Omit concurrency when the parent/root agent has already split work into the desired wave; omitted concurrency means all matrix rows in this call run concurrently.",
       "Reference row vars with {{key}} in promptTemplate, nameTemplate, cwdTemplate, acceptanceTemplate, and metadataTemplate.",
       "An array-valued var splats into list fields when the entry is exactly {{key}} (e.g. allowedWritePaths: [\"{{allowedWritePaths}}\"]); inside a string template it joins with newlines.",
       "Set acceptanceTemplate.allowedWritePaths to keep each agent on its own files; rows with disjoint paths can run in parallel.",
