@@ -14,31 +14,29 @@ import {
   type AuditBatchHandle,
 } from "./audit-log.ts";
 import { evaluateAcceptance, matchesPathPattern } from "./acceptance.ts";
-import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } from "./failure-classifier.ts";
+import { deriveFinalOutcome } from "./decision.ts";
+import { classifyProtocolFailure } from "./failure-classifier.ts";
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
 import { activityRole, activitySummary, iconForActivity, renderActivitySummaryLines, type ActivityRole } from "./thinking-steps.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
-  deriveTaskFinalStatus,
   emptyAcceptance,
   emptyWorkerReport,
-  type AcceptanceOutcome,
   type BatchArtifact,
   type BatchSummary,
   type FailureKind,
   type NormalizedTaskSpec,
-  type RuntimeOutcome,
   type TaskActivityItem,
   type TaskArtifact,
   type TaskAttemptRecord,
   type TasksToolParams,
-  type TaskFinalStatus,
 } from "./types.ts";
 import { buildAttemptRecord, runWorkerAttempt, type AttemptRuntimeResult, type RunWorkerAttemptInput } from "./worker-runner.ts";
 import { observedWritePaths, readWorkerEvents, workerEventsPathForAttempt } from "./worker-events.ts";
 import { readTaskReport } from "./worker-protocol.ts";
+import { auditableWriteEvidence, mergeWriteEvidence, writeEvidenceFromGitDiff, writeEvidenceFromTelemetry } from "./write-evidence.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -528,14 +526,6 @@ async function readWorkerLog(filePath: string): Promise<string> {
   }
 }
 
-function pickFailureKind(runtimeDecision: ReturnType<typeof classifyAndDecide>, protocolKind: FailureKind, acceptance: AcceptanceOutcome, finalStatus: TaskFinalStatus): FailureKind {
-  if (finalStatus === "aborted") return "aborted";
-  if (runtimeDecision.failureKind !== "none") return runtimeDecision.failureKind;
-  if (protocolKind !== "none") return protocolKind;
-  if (acceptance.status === "failed") return "acceptance_failed";
-  return finalStatus === "success" ? "none" : "worker_incomplete";
-}
-
 async function recordTaskActivity(input: {
   batch: AuditBatchHandle;
   activity: TaskActivityItem;
@@ -659,8 +649,15 @@ async function settleTask(input: {
   // Worker-side telemetry below still attributes any out-of-zone writes back to the worker.
   const attributedAudit = { available: rawAudit.available, files: filterFilesByAllowedZone(rawAudit.files, input.task) };
   const changedFileAudit = attributedAudit;
-  for (const file of changedFileAudit.files) input.writeAuditChangedFiles.add(file);
-  for (const file of telemetryWritePaths) input.writeAuditChangedFiles.add(file);
+  const writeEvidence = mergeWriteEvidence([
+    ...writeEvidenceFromGitDiff(changedFileAudit.files, { taskId: input.task.id, attemptId }),
+    ...writeEvidenceFromTelemetry(telemetryWritePaths, { taskId: input.task.id, attemptId }),
+  ]);
+  for (const item of auditableWriteEvidence(writeEvidence)) input.writeAuditChangedFiles.add(item.path);
+  const accumulatedWriteEvidence = mergeWriteEvidence([
+    ...writeEvidence,
+    ...writeEvidenceFromGitDiff([...input.writeAuditChangedFiles], { taskId: input.task.id }),
+  ]);
   const protocolKind = classifyProtocolFailure(reportResult.errors);
   const workerReport = reportResult.ok
     ? { status: reportResult.report!.status, reportPath: paths.reportPath, report: reportResult.report, errors: [], warnings: [] }
@@ -671,12 +668,10 @@ async function settleTask(input: {
   // than "we have no idea what the worker did."
   const auditAvailable = changedFileAudit.available || workerEvents.length > 0 || telemetryWritePaths.length > 0;
   const acceptance = reportResult.ok && reportResult.report!.status === "completed"
-    ? await evaluateAcceptance({ contract: input.task.acceptance, cwd: input.task.cwd, workerLog, report: reportResult.report, changedFiles: [...input.writeAuditChangedFiles], writeAuditAvailable: auditAvailable })
+    ? await evaluateAcceptance({ contract: input.task.acceptance, cwd: input.task.cwd, workerLog, report: reportResult.report, writeEvidence: accumulatedWriteEvidence, writeAuditAvailable: auditAvailable })
     : emptyAcceptance("skipped");
-  const runtimeDecision = classifyAndDecide({ ...(runtime as RuntimeOutcome), error: runtime.error });
-  const finalStatus = deriveTaskFinalStatus({ runtime: runtime.status, workerReport, acceptance });
-  const failureKind = pickFailureKind(runtimeDecision, protocolKind, acceptance, finalStatus);
-  const retryDecision = failureKind === runtimeDecision.failureKind ? runtimeDecision : retryDecisionForFailure(failureKind, runtime.status);
+  const outcome = deriveFinalOutcome({ runtime: { ...runtime, error: runtime.error }, workerReport, protocolKind, acceptance });
+  const { finalStatus, failureKind, retryDecision } = outcome;
 
   attempt = {
     ...attempt,

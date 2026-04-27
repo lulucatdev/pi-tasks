@@ -1,6 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AcceptanceCheckResult, AcceptanceContract, AcceptanceOutcome, PathCheck, TaskReport } from "./types.ts";
+import {
+  auditableWritePaths,
+  isSupervisorArtifactPath,
+  mergeWriteEvidence,
+  writeEvidenceFromGitDiff,
+  writeEvidenceFromTelemetry,
+  type WriteEvidence,
+} from "./write-evidence.ts";
 
 function toPathCheck(value: string | PathCheck): PathCheck {
   return typeof value === "string" ? { path: value, type: "file" } : value;
@@ -21,11 +29,6 @@ function normalizePatternPath(value: string): string {
 
 function hasGlobMagic(pattern: string): boolean {
   return pattern.includes("*");
-}
-
-function isSupervisorArtifactPath(relativePath: string): boolean {
-  const normalized = normalizePatternPath(relativePath);
-  return normalized.startsWith(".pi/tasks/") || normalized.includes("/.pi/tasks/");
 }
 
 export function matchesPathPattern(candidate: string, pattern: string): boolean {
@@ -131,6 +134,7 @@ export interface EvaluateAcceptanceInput {
   report?: TaskReport;
   changedFiles?: string[];
   observedWritePaths?: string[];
+  writeEvidence?: WriteEvidence[];
   writeAuditAvailable?: boolean;
 }
 
@@ -239,7 +243,12 @@ export async function evaluateAcceptance(input: EvaluateAcceptanceInput): Promis
   if (hasWriteBoundary && input.writeAuditAvailable === false) {
     checks.push({ name: "writeAudit", status: "failed", message: "Write-boundary contract requires write audit, but no git diff or worker telemetry was available." });
   }
-  addChangedFileChecks(checks, contract, [...(input.changedFiles ?? []), ...(input.observedWritePaths ?? [])]);
+  const writeEvidence = mergeWriteEvidence([
+    ...(input.writeEvidence ?? []),
+    ...writeEvidenceFromGitDiff(input.changedFiles ?? []),
+    ...writeEvidenceFromTelemetry(input.observedWritePaths ?? []),
+  ]);
+  addChangedFileChecks(checks, contract, auditableWritePaths(writeEvidence));
 
   const failedChecks = checks.filter((check) => check.status === "failed");
   if (failedChecks.length > 0) {
