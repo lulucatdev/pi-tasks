@@ -46,6 +46,26 @@ test("validateTasksPlanInput accepts a compact chapter plan", () => {
   assert.doesNotThrow(() => validateTasksPlanInput(chapterPlan()));
 });
 
+test("validateTasksPlanInput rejects unknown fields so tasks_plan stays a compact transport DSL", () => {
+  assert.throws(() => validateTasksPlanInput({
+    batchName: "b",
+    matrix: [{ id: "a" }],
+    promptTemplate: "p",
+    conditionals: [{ if: "x" }],
+  }), /not supported.*frozen/);
+  assert.throws(() => validateTasksPlanInput({
+    batchName: "b",
+    matrix: [{ id: "a", dependsOn: ["other"] }],
+    promptTemplate: "p",
+  }), /matrix\[0\]\.dependsOn is not supported/);
+  assert.throws(() => validateTasksPlanInput({
+    batchName: "b",
+    matrix: [{ id: "a" }],
+    promptTemplate: "p",
+    synthesis: { mode: "parent", steps: ["do more"] },
+  }), /synthesis\.steps is not supported/);
+});
+
 test("validateTasksPlanInput rejects empty matrix, duplicate ids, and unsafe ids", () => {
   assert.throws(() => validateTasksPlanInput({ batchName: "b", matrix: [], promptTemplate: "p" }), /matrix/);
   assert.throws(() => validateTasksPlanInput({

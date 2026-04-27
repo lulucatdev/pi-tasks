@@ -6,17 +6,35 @@ Scope: `extensions/task`
 
 ## Decision
 
-`task` and `tasks` are no longer a thin wrapper around worker output files. They are a root-supervised task agent runtime.
+`task` and `tasks` are no longer thin wrappers around worker output files. They are a root-supervised task agent runtime.
 
-The root process is the supervisor. Each task is a task agent attempt. A task reaches `success` only when all of these pass:
+The root process is the supervisor. Each task reaches `success` only when all blocking gates pass:
 
 1. runtime outcome is successful;
-2. worker submits a valid `task-report.json` or future `task_report` payload;
+2. worker submits a valid `task-report.json` or `task_report` payload;
 3. worker report status is `completed`;
 4. acceptance checks pass or are explicitly skipped/warning-only;
 5. batch audit artifacts finalize with `auditIntegrity: "ok"`.
 
 Legacy `TASK_STATUS` markers are only warning signals for old logs. They are not a completion protocol.
+
+## Complexity Boundaries
+
+The implementation is intentionally layered so runtime facts do not get confused with policy or UI:
+
+```text
+tools/      task.ts / tasks.ts / tasks-plan.ts input validation and expansion
+core/       supervisor.ts scheduling, concurrency, attempt lifecycle, retry loop
+runner/     worker-runner.ts child process ownership and stdout/stderr artifacts
+protocol/   worker-protocol.ts and task-report-tool.ts structured report contract
+audit/      worker-events.ts + write-evidence.ts normalized tool/git write facts
+acceptance/ acceptance.ts contract evaluation over report, filesystem, write evidence
+decision/   decision.ts deriveFinalOutcome(runtime, report, acceptance, audit)
+view/       task-view.ts derived task/batch views for UI and summary
+ui/         task-ui.ts artifact reader and rerun payload builder
+```
+
+The important invariant is: **facts are gathered once; status, failure kind, retryability, summary counts, and UI icons are derived from those facts.** Existing artifact JSON still stores compatibility fields such as `finalStatus` and `failureKind`, but UI/summary code should use `task-view.ts` materialization rather than trusting those fields blindly.
 
 ## Storage Layout
 
@@ -27,6 +45,7 @@ Every run creates one batch directory:
   batch.json
   events.jsonl
   summary.md
+  plan.json                  # only present when tasks_plan was used
   tasks/
     <taskId>.json
   attempts/
@@ -36,19 +55,22 @@ Every run creates one batch directory:
         task-report.json
         stdout.jsonl
         stderr.txt
+        worker-events.jsonl
         attempt.json
 ```
 
-`batchId` is sortable timestamp plus random suffix. `taskId` is batch-local (`t001`, `t002`, ...).
+`batchId` is sortable timestamp plus random suffix. `taskId` is batch-local and sanitized.
 
-## Worker File Protocol
+## Worker Completion Protocol
 
 A worker receives exact paths for:
 
 - `worker.md` — human-readable log;
 - `task-report.json` — machine-readable completion report.
 
-The supervisor trusts only the structured report. Required shape:
+The preferred completion path is the child-only `task_report` tool, which writes the same structured report to the supervised report path. The file protocol remains the fallback.
+
+Required report shape:
 
 ```ts
 type TaskReport = {
@@ -64,6 +86,8 @@ type TaskReport = {
   error?: string | null;
 };
 ```
+
+The worker prompt must state clearly that ending without `task_report`/`task-report.json` fails the task, even if file edits succeeded. Thinking-only final turns are `worker_incomplete` and are parent-retryable.
 
 ## API
 
@@ -82,8 +106,9 @@ type TasksToolParams = {
   concurrency?: number;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
-  audit?: { level?: "basic" | "full" };
   acceptanceDefaults?: AcceptanceContract;
+  parentBatchId?: string;
+  rerunOfTaskIds?: string[];
 };
 
 type TasksPlanRow = {
@@ -104,9 +129,10 @@ type TasksPlanInput = {
   metadataTemplate?: Record<string, string>;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
-  audit?: { level?: "basic" | "full" };
   acceptanceDefaults?: AcceptanceContract;
-  synthesis?: { mode?: "parent" | "report-only"; instructions?: string };
+  synthesis?: { mode?: "parent" | "report-only"; instructions?: string }; // experimental metadata only
+  parentBatchId?: string;
+  rerunOfTaskIds?: string[];
 };
 ```
 
@@ -114,76 +140,106 @@ type TasksPlanInput = {
 
 `tasks` is the small-batch escape hatch (≤ `MAX_INLINE_TASKS=4` tasks, ≤ `MAX_INLINE_PROMPT_BYTES=8000` prompt bytes). Oversized inline payloads fail fast with a message pointing to `tasks_plan`.
 
-`tasks_plan` is the primary fan-out tool. The extension validates the input, expands the matrix locally into N full `TaskSpecInput`s, and calls `executeSupervisedTasks` with the same artifact/audit/acceptance/retry/throttle behavior as `tasks`. It additionally writes `plan.json` next to `batch.json` recording the matrix, templates, expanded task names, and synthesis instructions.
+`tasks_plan` is the primary fan-out transport. The extension validates the input, expands the matrix locally into N full `TaskSpecInput`s, and calls `executeSupervisedTasks` with the same artifact/audit/acceptance/retry/throttle behavior as `tasks`. It additionally writes `plan.json` next to `batch.json`.
 
-### Why `tasks_plan` exists
+## `tasks_plan`
+
+### Why it exists
 
 Inline `tasks({ tasks: [...] })` requires the model to stream the entire batch as one tool-call argument. With many long per-task prompts, that argument can be tens of KB and the model/provider can be `terminated` mid-stream. When that happens, `execute()` is never called: there is no `TASKS starting`, no `.pi/tasks/<batchId>`, no heartbeat, and no logs. `tasks_plan` keeps the streamed argument tiny (one shared `promptTemplate` + N short `matrix` rows) so the supervisor reaches `execute()` quickly and produces visible artifacts.
 
-### `tasks_plan` template rules
+### Frozen DSL rules
 
-- `{{key}}` lookups resolve in this order: row.id, row.name, row.cwd, row.vars.
+`tasks_plan` is deliberately frozen as **compact input transport**, not a workflow engine.
+
+- Allowed top-level keys are exactly the `TasksPlanInput` fields above. Unknown keys fail validation.
+- Matrix rows are exactly `id`, `name`, `cwd`, and `vars`. Unknown row keys fail validation.
+- No conditionals, loops, dependency graphs, nested tasks, or workflow steps are supported.
+- `synthesis` is experimental metadata for the parent agent's post-batch summary; it is not executable logic.
+- `{{key}}` lookups resolve from row `id`, `name`, `cwd`, and `vars`.
 - In a string field, an array value joins with `\n`.
 - In an array string field (e.g. `acceptanceTemplate.allowedWritePaths`), an entry that is exactly `{{key}}` and whose row value is an array splats into multiple list entries.
 - `requiredPaths` accepts both bare strings and `PathCheck` objects; `path`, `requiredRegex`, and `forbiddenRegex` are all template-substituted.
 - Unknown variables raise an error before any worker spawns.
 - Hard limits: `MAX_PLAN_ROWS=100`, `MAX_PLAN_PROMPT_TEMPLATE_BYTES=32000`, `MAX_PLAN_TOTAL_INPUT_BYTES=64000`.
 
-### Write-boundary parallelism
+## Write Evidence and Acceptance
 
-Tasks with `acceptance.allowedWritePaths` (or `acceptance.forbiddenWritePaths`) run in parallel like everything else. The supervisor attributes file changes per task this way:
+Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths.
 
-- Each task captures a `git status` baseline right before it starts. After the task finishes, the supervisor diffs the project against that baseline and **filters the diff to files matching this task's `allowedWritePaths` zone**. Concurrent writes by other tasks (which target their own disjoint zones) never appear in this task's audit set.
-- Worker-side tool telemetry (`file_write_observed` events from the worker's own tool calls) is merged unfiltered. Out-of-zone writes show up in telemetry, so `acceptance.allowedWritePaths` and `acceptance.forbiddenWritePaths` violations are caught even when several tasks run in parallel.
+Write auditing uses a normalized evidence layer:
 
-This gives true parallelism for chapter-style fan-out where each agent owns a disjoint `chapters/chN/**` zone. If two tasks declare overlapping `allowedWritePaths`, attribution becomes ambiguous (the same changed file can match both zones); declare disjoint zones or run those tasks with `concurrency: 1` if strict attribution matters.
+```ts
+type WriteEvidence = {
+  path: string;
+  source: "git_diff" | "worker_telemetry";
+  taskId?: string;
+  attemptId?: string;
+  confidence: "high" | "medium" | "low";
+  ignored?: boolean;
+  reason?: string;
+};
+```
 
-## Acceptance Contracts
+Rules:
 
-Supported checks:
+- Git diff and worker telemetry are converted to `WriteEvidence[]` before acceptance checks.
+- `.pi/tasks/**` supervisor protocol artifacts (`worker.md`, `task-report.json`, `attempt.json`, etc.) are ignored by write-boundary checks.
+- `allowedWritePaths` path semantics are explicit: exact path matches exactly, trailing slash means directory prefix, `*`/`**` are globs.
+- Each task's git diff is filtered to that task's allowed zone before attribution, so disjoint write-boundary tasks can run in parallel.
+- Worker telemetry is attributed to the emitting task and catches out-of-zone writes even when git diff attribution is ambiguous.
 
-- `requiredPaths`
-- `forbiddenPaths`
-- `requiredOutputRegex`
-- `forbiddenOutputRegex`
-- `requiredReportRegex`
-- `forbiddenReportRegex`
-- `minWorkerLogBytes`
-- `minReportSummaryChars`
-- `allowedWritePaths`
-- `forbiddenWritePaths`
-- `requireDeliverablesEvidence`
-- `auditOnly`
+**Do not** add `TASK_STATUS: completed` as an acceptance requirement. **Do not** list `task-report.json` or `worker.md` in `requiredPaths`. Prefer `requireDeliverablesEvidence: true` and `minReportSummaryChars` for completion proof.
 
-Acceptance failure is not parent-retryable by default. It means the worker ran and produced a report, but the delivered artifacts did not satisfy the parent-side contract.
+Acceptance failure is not parent-retryable by default. It means the worker ran and produced a report, but delivered artifacts did not satisfy the parent-side contract.
 
-## Retry Boundary
+## Final Outcome and Retry Boundary
+
+`decision.ts` derives a structured outcome:
+
+```ts
+type FinalOutcome = {
+  finalStatus: "success" | "error" | "aborted";
+  blockingGate: "none" | "runtime" | "protocol" | "acceptance" | "audit";
+  failureKind: FailureKind;
+  retryDecision: RetryDecision;
+};
+```
 
 Worker agents should handle recoverable work-level errors themselves and record those in `internalRetries`.
 
-The parent supervisor retries only launch/session/provider-level failures that did not produce a valid worker report:
+The parent supervisor retries only launch/session/provider/worker-incomplete failures that did not produce a valid worker report:
 
 - `launch_error`
 - `provider_transient`
 - `provider_stalled`
+- `worker_stalled`
+- `worker_incomplete`
 
-Examples: `429`, `5xx`, `overloaded`, `Internal server error`, `terminated`, connection reset, timeout.
+Examples: spawn failure, `429`, `5xx`, `overloaded`, `Internal server error`, `terminated`, connection reset, timeout, thinking-only stop, missing report.
 
 The parent does not retry by default for:
 
 - `acceptance_failed`
-- `protocol_error` after a valid worker turn
+- `protocol_error` after a valid worker turn or malformed report
 - `blocked`
 - user abort
 - permission/auth/model errors
 
-## Dynamic Throttling
+## Runtime Event Handling
 
-The supervisor records transient failure windows and emits `throttle_decision` events. It lowers concurrency when transient failure rate exceeds a threshold and gradually recovers after stable windows.
+`terminal-state.ts` owns assistant terminal/recovery interpretation:
+
+- visible assistant text with non-tool `stopReason` is terminal completion;
+- `stopReason="stop"` with thinking-only content is `thinking_only_stop` / `worker_incomplete`;
+- `stopReason="error"` does not schedule the normal terminal exit guard, because Codex CLI may internally recover;
+- recovery events such as `auto_retry_start`, `agent_start`, `turn_start`, `message_start`, and `tool_execution_start` cancel stale terminal guards and clear stale error state.
+
+`worker-runner.ts` owns process lifecycle, stdout/stderr artifacts, and timer actions. It should not grow more terminal classification rules inline.
 
 ## UI and Rerun
 
-`/tasks-ui` should read batch artifacts, not session-only recent state. It presents:
+`/tasks-ui` reads batch artifacts, not session-only state. It presents:
 
 - batch list;
 - batch detail;
@@ -207,17 +263,13 @@ Supported artifact navigation commands:
 
 Rerun payloads are constructed from artifacts and preserve `parentBatchId` / `rerunOfTaskIds`.
 
-Live tool updates emit compact batch progress plus recent per-task thinking/tool activity derived from worker `stdout.jsonl` events. The same activity is persisted on each `tasks/<taskId>.json` artifact and shown by task/attempt detail views.
+Live tool updates emit compact batch progress plus recent per-task thinking/tool activity derived from worker `stdout.jsonl` events. Summary/UI counts are materialized through `task-view.ts` so stale compatibility fields do not leak into live display during retries.
 
-## Phase 3 Direction
+## Do Not Add More Here Yet
 
-The file protocol remains the fallback. A future child-only `task_report` tool and worker event channel provide stronger live telemetry:
+Before adding new features, stabilize these boundaries:
 
-- `heartbeat`
-- `progress`
-- `tool_call_started`
-- `tool_call_finished`
-- `file_write_observed`
-- `task_report_submitted`
-
-Heartbeat/stall detection classifies `worker_stalled`, `provider_stalled`, and `unknown_stall`.
+- no more acceptance check types until `WriteEvidence[]` stays quiet in real batches;
+- no `tasks_plan` workflow language features;
+- no additional completion protocols until `task_report` + file fallback are fully unified as one `ReportOutcome`;
+- no richer UI state unless it is derived from artifacts/events, not maintained separately.

@@ -118,8 +118,8 @@ const TasksPlanParams = Type.Object({
   throttle: Type.Optional(ThrottleSchema),
   acceptanceDefaults: Type.Optional(AcceptanceSchema),
   synthesis: Type.Optional(Type.Object({
-    mode: Type.Optional(Type.Union([Type.Literal("parent"), Type.Literal("report-only")], { description: "Who synthesizes after the batch finishes. Default: parent." })),
-    instructions: Type.Optional(Type.String({ description: "Instructions for the root agent's post-batch synthesis." })),
+    mode: Type.Optional(Type.Union([Type.Literal("parent"), Type.Literal("report-only")], { description: "Experimental metadata only: who synthesizes after the batch finishes. Default: parent. Do not use tasks_plan as a workflow engine." })),
+    instructions: Type.Optional(Type.String({ description: "Experimental metadata only: root agent post-batch synthesis hint, not executable workflow logic." })),
   })),
   parentBatchId: Type.Optional(Type.String()),
   rerunOfTaskIds: Type.Optional(Type.Array(Type.String())),

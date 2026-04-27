@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isDiscoverableBatch, readJsonFile } from "./audit-log.ts";
 import { renderActivityCollapsedLine, renderActivitySummaryLines } from "./thinking-steps.ts";
+import { deriveTaskView, summarizeTasks } from "./task-view.ts";
 import type { BatchArtifact, InternalRetryRecord, TaskArtifact, TaskAttemptRecord, TaskDeliverable, TaskEvidence } from "./types.ts";
 
 export interface BatchListItem {
@@ -66,7 +67,7 @@ function lastAttempt(task: TaskArtifact): TaskAttemptRecord | undefined {
 }
 
 function taskSortKey(task: TaskArtifact): string {
-  return `${task.finalStatus === "success" ? "1" : "0"}:${task.taskId}`;
+  return `${deriveTaskView(task).finalStatus === "success" ? "1" : "0"}:${task.taskId}`;
 }
 
 function failureReason(task: TaskArtifact): string {
@@ -104,15 +105,16 @@ function renderInternalRetries(retries: InternalRetryRecord[] = []): string[] {
   return ["- Internal retries:", ...retries.map((item) => `  - ${item.outcome}: ${item.reason} -> ${item.action}`)];
 }
 
-export function summarizeBatch(batch: BatchArtifact): BatchListItem {
+export function summarizeBatch(batch: BatchArtifact, tasks?: TaskArtifact[]): BatchListItem {
+  const materializedSummary = tasks ? summarizeTasks(tasks) : batch.summary;
   const parts = [
-    `${batch.summary.success} ok`,
-    `${batch.summary.error} err`,
-    `${batch.summary.aborted} aborted`,
+    `${materializedSummary.success} ok`,
+    `${materializedSummary.error} err`,
+    `${materializedSummary.aborted} aborted`,
   ];
-  if (batch.summary.acceptanceFailed) parts.push(`${batch.summary.acceptanceFailed} acceptance`);
-  if (batch.summary.providerTransientFailed) parts.push(`${batch.summary.providerTransientFailed} transient`);
-  if (batch.summary.retried) parts.push(`${batch.summary.retried} retried`);
+  if (materializedSummary.acceptanceFailed) parts.push(`${materializedSummary.acceptanceFailed} acceptance`);
+  if (materializedSummary.providerTransientFailed) parts.push(`${materializedSummary.providerTransientFailed} transient`);
+  if (materializedSummary.retried) parts.push(`${materializedSummary.retried} retried`);
   return {
     batchId: batch.batchId,
     status: batch.status,
@@ -129,7 +131,8 @@ export async function listBatches(cwd: string): Promise<BatchListItem[]> {
   const items: BatchListItem[] = [];
   for (const dir of dirs) {
     const batch = await readJsonFile<BatchArtifact>(path.join(dir, "batch.json"));
-    items.push(summarizeBatch(batch));
+    const tasks = await Promise.all(batch.taskIds.map((taskId) => readJsonFile<TaskArtifact>(path.join(dir, "tasks", `${taskId}.json`)).catch(() => null)));
+    items.push(summarizeBatch(batch, tasks.filter((task): task is TaskArtifact => task !== null)));
   }
   return items;
 }
@@ -177,12 +180,13 @@ export function renderBatchListLines(items: BatchListItem[]): string[] {
 
 export function renderBatchDetailLines(detail: BatchDetail): string[] {
   const batch = detail.batch;
-  const failed = detail.tasks.filter((task) => task.finalStatus !== "success").sort((a, b) => taskSortKey(a).localeCompare(taskSortKey(b)));
+  const materializedSummary = summarizeTasks(detail.tasks);
+  const failed = detail.tasks.filter((task) => deriveTaskView(task).finalStatus !== "success").sort((a, b) => taskSortKey(a).localeCompare(taskSortKey(b)));
   const allTasks = [...detail.tasks].sort((a, b) => taskSortKey(a).localeCompare(taskSortKey(b)));
   const lines = [
     `Batch ${batch.batchId}`,
     `Status: ${batch.status} audit=${batch.auditIntegrity}`,
-    `Summary: ${batch.summary.success} ok, ${batch.summary.error} err, ${batch.summary.aborted} aborted, ${batch.summary.acceptanceFailed} acceptance, ${batch.summary.providerTransientFailed} transient, ${batch.summary.retried} retried`,
+    `Summary: ${materializedSummary.success} ok, ${materializedSummary.error} err, ${materializedSummary.aborted} aborted, ${materializedSummary.acceptanceFailed} acceptance, ${materializedSummary.providerTransientFailed} transient, ${materializedSummary.retried} retried`,
     `Concurrency: requested=${batch.requestedConcurrency} effective=${batch.effectiveConcurrency}`,
     `Duration: ${durationText(batch.startedAt, batch.finishedAt)}`,
     `Artifacts: ${batch.batchDir}`,
@@ -194,7 +198,8 @@ export function renderBatchDetailLines(detail: BatchDetail): string[] {
     lines.push("", "Failed tasks:");
     for (const task of failed) {
       const attempt = lastAttempt(task);
-      lines.push(`- ${task.taskId} ${task.name}: ${statusLabel(task.finalStatus)} ${task.failureKind} retry=${task.retryability} attempts=${task.attempts.length} reason=${failureReason(task)}`);
+      const view = deriveTaskView(task);
+      lines.push(`- ${task.taskId} ${task.name}: ${statusLabel(view.finalStatus)} ${view.failureKind} retry=${view.retryability} attempts=${view.attempts} reason=${failureReason(task)}`);
       if (task.acceptance.errors.length) lines.push(`  acceptance: ${truncate(task.acceptance.errors.join("; "), 260)}`);
       if (task.workerReport.errors.length) lines.push(`  report: ${truncate(task.workerReport.errors.join("; "), 260)}`);
       if (attempt) lines.push(`  inspect: /tasks-ui ${batch.batchId} attempt ${task.taskId} ${attempt.id}`);
@@ -203,7 +208,8 @@ export function renderBatchDetailLines(detail: BatchDetail): string[] {
 
   lines.push("", "Tasks:");
   for (const task of allTasks) {
-    lines.push(`- ${task.taskId} ${task.name}: ${statusLabel(task.finalStatus ?? task.status)} failure=${task.failureKind} acceptance=${task.acceptance.status} attempts=${task.attempts.length}`);
+    const view = deriveTaskView(task);
+    lines.push(`- ${task.taskId} ${task.name}: ${statusLabel(view.displayStatus)} failure=${view.failureKind} acceptance=${view.acceptanceStatus} attempts=${view.attempts}`);
   }
 
   lines.push("", "Next commands:");
@@ -211,8 +217,8 @@ export function renderBatchDetailLines(detail: BatchDetail): string[] {
   lines.push(`- /tasks-ui ${batch.batchId} attempt <taskId> latest`);
   if (failed.length > 0) {
     lines.push(`- /tasks-ui rerun failed ${batch.batchId}`);
-    if (batch.summary.acceptanceFailed) lines.push(`- /tasks-ui rerun acceptance-failed ${batch.batchId}`);
-    if (batch.summary.providerTransientFailed) lines.push(`- /tasks-ui rerun provider-transient ${batch.batchId}`);
+    if (materializedSummary.acceptanceFailed) lines.push(`- /tasks-ui rerun acceptance-failed ${batch.batchId}`);
+    if (materializedSummary.providerTransientFailed) lines.push(`- /tasks-ui rerun provider-transient ${batch.batchId}`);
   }
   return lines;
 }
@@ -233,12 +239,13 @@ export function renderTaskDetailLines(detail: BatchDetail, taskId: string): stri
   const task = findTask(detail, taskId);
   const report = task.workerReport.report;
   const attempt = lastAttempt(task);
+  const view = deriveTaskView(task);
   const lines = [
     `Task ${task.taskId} ${task.name}`,
     `Batch: ${detail.batch.batchId}`,
-    `Status: ${task.finalStatus ?? task.status} failure=${task.failureKind} retry=${task.retryability}`,
+    `Status: ${view.displayStatus} failure=${view.failureKind} retry=${view.retryability}`,
     `Cwd: ${task.cwd}`,
-    `Acceptance: ${task.acceptance.status}`,
+    `Acceptance: ${view.acceptanceStatus}`,
     `Worker report: ${task.workerReport.status}${task.workerReport.reportPath ? ` (${task.workerReport.reportPath})` : ""}`,
     `Prompt: ${truncate(task.prompt, 500)}`,
   ];
@@ -283,7 +290,7 @@ export function renderTaskDetailLines(detail: BatchDetail, taskId: string): stri
 
   lines.push("", "Next commands:");
   lines.push(`- /tasks-ui ${detail.batch.batchId} attempt ${task.taskId} latest`);
-  if (task.finalStatus !== "success") lines.push(`- /tasks-ui rerun selected ${detail.batch.batchId} ${task.taskId}`);
+  if (view.finalStatus !== "success") lines.push(`- /tasks-ui rerun selected ${detail.batch.batchId} ${task.taskId}`);
   return lines;
 }
 

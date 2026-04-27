@@ -54,6 +54,23 @@ export interface ExpandedTasksPlan {
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const TEMPLATE_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 const SOLO_TEMPLATE_RE = /^\s*\{\{\s*([A-Za-z0-9_]+)\s*\}\}\s*$/;
+const ALLOWED_PLAN_KEYS = new Set([
+	"batchName",
+	"concurrency",
+	"matrix",
+	"promptTemplate",
+	"nameTemplate",
+	"cwdTemplate",
+	"acceptanceTemplate",
+	"metadataTemplate",
+	"retry",
+	"throttle",
+	"acceptanceDefaults",
+	"synthesis",
+	"parentBatchId",
+	"rerunOfTaskIds",
+]);
+const ALLOWED_ROW_KEYS = new Set(["id", "name", "cwd", "vars"]);
 
 type Ctx = Record<string, string | string[]>;
 
@@ -72,6 +89,9 @@ function isStringArray(value: unknown): value is string[] {
 export function validateTasksPlanInput(input: unknown): asserts input is TasksPlanInput {
 	assertObject(input, "tasks_plan params must be an object.");
 	const record = input as Record<string, unknown>;
+	for (const key of Object.keys(record)) {
+		if (!ALLOWED_PLAN_KEYS.has(key)) throw new Error(`tasks_plan.${key} is not supported. tasks_plan is frozen to matrix/template transport; move workflow logic into worker prompts or parent synthesis.`);
+	}
 	assertString(record.batchName, "tasks_plan.batchName must be a non-empty string.");
 	assertString(record.promptTemplate, "tasks_plan.promptTemplate must be a non-empty string.");
 	if (Buffer.byteLength(record.promptTemplate as string, "utf-8") > MAX_PLAN_PROMPT_TEMPLATE_BYTES) {
@@ -84,6 +104,9 @@ export function validateTasksPlanInput(input: unknown): asserts input is TasksPl
 	for (const [i, rowValue] of matrix.entries()) {
 		assertObject(rowValue, `tasks_plan.matrix[${i}] must be an object.`);
 		const row = rowValue as Record<string, unknown>;
+		for (const key of Object.keys(row)) {
+			if (!ALLOWED_ROW_KEYS.has(key)) throw new Error(`tasks_plan.matrix[${i}].${key} is not supported. Rows are frozen to id/name/cwd/vars.`);
+		}
 		assertString(row.id, `tasks_plan.matrix[${i}].id must be a non-empty string.`);
 		const id = (row.id as string).trim();
 		if (!SAFE_ID_RE.test(id)) throw new Error(`tasks_plan.matrix[${i}].id must use only letters, numbers, dot, underscore, or dash.`);
@@ -107,6 +130,19 @@ export function validateTasksPlanInput(input: unknown): asserts input is TasksPl
 	if (record.concurrency !== undefined) {
 		if (!Number.isInteger(record.concurrency) || (record.concurrency as number) < 1) {
 			throw new Error("tasks_plan.concurrency must be a positive integer when provided.");
+		}
+	}
+	if (record.synthesis !== undefined) {
+		assertObject(record.synthesis, "tasks_plan.synthesis must be an object when provided. It is experimental metadata only, not a workflow language.");
+		const synthesis = record.synthesis as Record<string, unknown>;
+		for (const key of Object.keys(synthesis)) {
+			if (key !== "mode" && key !== "instructions") throw new Error(`tasks_plan.synthesis.${key} is not supported. synthesis is experimental metadata only.`);
+		}
+		if (synthesis.mode !== undefined && synthesis.mode !== "parent" && synthesis.mode !== "report-only") {
+			throw new Error("tasks_plan.synthesis.mode must be 'parent' or 'report-only' when provided.");
+		}
+		if (synthesis.instructions !== undefined && typeof synthesis.instructions !== "string") {
+			throw new Error("tasks_plan.synthesis.instructions must be a string when provided.");
 		}
 	}
 	const totalBytes = Buffer.byteLength(JSON.stringify(input), "utf-8");

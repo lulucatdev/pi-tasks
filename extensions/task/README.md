@@ -31,8 +31,9 @@ type TasksToolParams = {
   concurrency?: number;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
-  audit?: { level?: "basic" | "full" };
   acceptanceDefaults?: AcceptanceContract;
+  parentBatchId?: string;
+  rerunOfTaskIds?: string[];
 };
 
 type TasksPlanRow = {
@@ -53,9 +54,10 @@ type TasksPlanInput = {
   metadataTemplate?: Record<string, string>;
   retry?: ParentRetryPolicy;
   throttle?: ThrottlePolicy;
-  audit?: { level?: "basic" | "full" };
   acceptanceDefaults?: AcceptanceContract;
-  synthesis?: { mode?: "parent" | "report-only"; instructions?: string };
+  synthesis?: { mode?: "parent" | "report-only"; instructions?: string }; // experimental metadata only
+  parentBatchId?: string;
+  rerunOfTaskIds?: string[];
 };
 ```
 
@@ -66,6 +68,8 @@ type TasksPlanInput = {
 - In an array string field (e.g. `acceptanceTemplate.allowedWritePaths`), an entry that is exactly `{{key}}` and whose row value is an array splats into multiple list entries.
 - `requiredPaths` accepts both bare strings and `PathCheck` objects; `path`, `requiredRegex`, and `forbiddenRegex` are all template-substituted.
 - Unknown variables raise an error before any worker spawns.
+- `tasks_plan` is frozen as compact input transport, not a workflow engine: unknown top-level keys, unknown row keys, conditionals, loops, dependency graphs, and nested workflow steps are rejected.
+- `synthesis` is experimental metadata for parent post-batch summary; it is not executable workflow logic.
 
 ### `tasks_plan` example
 
@@ -74,7 +78,7 @@ tasks_plan({
   batchName: "oracle-chapter-fixes",
   concurrency: 6,
   matrix: [
-    { id: "ch01", vars: { chapter: "01", report: "oracle/reports/ch01.md", allowedWritePaths: ["chapters/ch01/**", ".pi/tasks/**"] } },
+    { id: "ch01", vars: { chapter: "01", report: "oracle/reports/ch01.md", allowedWritePaths: ["chapters/ch01/"] } },
     // ... ch02 through ch19
   ],
   promptTemplate: `
@@ -91,22 +95,21 @@ Submit a structured task report with changed files, evidence, and blockers.
     minReportSummaryChars: 80,
   },
   metadataTemplate: { chapter: "{{chapter}}", report: "{{report}}" },
-  synthesis: { mode: "parent", instructions: "Summarize chapter outcomes, failures, and changed files." },
 });
 ```
 
 ## Completion protocol
 
-A worker must write:
+A worker must submit:
 
-- `worker.md` for human-readable notes;
-- `task-report.json` for machine-readable completion.
+- a non-empty `worker.md` for human-readable notes;
+- a structured report via the child-only `task_report` tool, or fallback `task-report.json`.
 
-The supervisor trusts `task-report.json`, not natural language claims or legacy `TASK_STATUS` markers.
+The supervisor trusts the structured report, not natural language claims or legacy `TASK_STATUS` markers. Thinking-only final turns and missing reports are `worker_incomplete` and parent-retryable when no valid report was produced.
 
 ## Acceptance contracts
 
-Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths.
+Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths. Git diff files and worker telemetry first become normalized `WriteEvidence[]`; `.pi/tasks/**` supervisor artifacts are ignored, exact paths match exactly, trailing slash patterns mean directory prefixes, and `*`/`**` keep glob behavior.
 
 **Do not** add `TASK_STATUS: completed` (or similar log-marker regexes) as an acceptance requirement: V3 derives completion from the structured `task-report.json` the worker submits, and a missing log marker only produces false negatives. **Do not** list `task-report.json` or `worker.md` in `requiredPaths`: the supervisor writes those itself in the batch artifact directory, not under the task's cwd. Prefer `requireDeliverablesEvidence: true` and `minReportSummaryChars` to enforce real completion proof.
 
@@ -147,7 +150,7 @@ tasks({
     attempt.json
 ```
 
-`summary.md` is the quickest human entry point after a run. When `tasks_plan` ran the batch, `plan.json` records the matrix, templates, taskNames, and synthesis instructions that produced it.
+`summary.md` is the quickest human entry point after a run. When `tasks_plan` ran the batch, `plan.json` records the matrix, templates, taskNames, and optional experimental synthesis metadata that produced it.
 
 ## Artifact UI
 
@@ -169,6 +172,6 @@ Batch detail shows failed tasks first with reason, retryability, and artifact in
 
 Workers should retry recoverable work errors internally and record them in `internalRetries`.
 
-The parent supervisor retries only launch/session/provider transient failures such as `429`, `5xx`, `overloaded`, `Internal server error`, `terminated`, timeout, and connection reset when no valid worker report was produced.
+The parent supervisor retries only launch/session/provider/worker-incomplete failures when no valid worker report was produced: `launch_error`, `provider_transient`, `provider_stalled`, `worker_stalled`, and `worker_incomplete` (for example `429`, `5xx`, `overloaded`, `Internal server error`, `terminated`, timeout, connection reset, thinking-only stop, or no task report).
 
-Acceptance failures, blocked reports, invalid contracts, and user aborts are not parent-retryable by default.
+Acceptance failures, malformed reports, invalid contracts, and user aborts are not parent-retryable by default.

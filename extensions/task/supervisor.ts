@@ -20,13 +20,12 @@ import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./re
 import { normalizeTasksRun } from "./run-tasks.ts";
 import { writeSummaryMarkdown } from "./summary.ts";
 import { activityRole, activitySummary, iconForActivity, renderActivitySummaryLines, type ActivityRole } from "./thinking-steps.ts";
+import { countTaskLifecycle, deriveTaskView, failureReasonLabel, summarizeTasks, terminalBatchStatus } from "./task-view.ts";
 import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   emptyAcceptance,
   emptyWorkerReport,
   type BatchArtifact,
-  type BatchSummary,
-  type FailureKind,
   type NormalizedTaskSpec,
   type TaskActivityItem,
   type TaskArtifact,
@@ -64,71 +63,8 @@ export interface SupervisedTasksResult {
   text: string;
 }
 
-function terminalBatchStatus(summary: BatchSummary): "success" | "error" | "aborted" {
-  if (summary.error > 0) return "error";
-  if (summary.aborted > 0) return "aborted";
-  return "success";
-}
-
-function summarizeTasks(tasks: TaskArtifact[]): BatchSummary {
-  const summary: BatchSummary = { total: tasks.length, success: 0, error: 0, aborted: 0, acceptanceFailed: 0, providerTransientFailed: 0, protocolFailed: 0, retried: 0 };
-  for (const task of tasks) {
-    if (task.finalStatus) summary[task.finalStatus] += 1;
-    if (task.failureKind === "acceptance_failed") summary.acceptanceFailed += 1;
-    if (task.failureKind === "provider_transient") summary.providerTransientFailed += 1;
-    if (task.failureKind === "protocol_error") summary.protocolFailed += 1;
-    if (task.attempts.length > 1) summary.retried += 1;
-  }
-  return summary;
-}
-
-function countLifecycle(tasks: TaskArtifact[]): { done: number; queued: number; running: number; success: number; error: number; aborted: number } {
-  return {
-    done: tasks.filter((task) => task.finalStatus !== null).length,
-    queued: tasks.filter((task) => task.status === "queued").length,
-    running: tasks.filter((task) => task.status === "running").length,
-    success: tasks.filter((task) => task.finalStatus === "success").length,
-    error: tasks.filter((task) => task.finalStatus === "error").length,
-    aborted: tasks.filter((task) => task.finalStatus === "aborted").length,
-  };
-}
-
 function statusIcon(task: TaskArtifact): string {
-  switch (task.finalStatus ?? task.status) {
-    case "success": return "✓";
-    case "error": return "✗";
-    case "aborted": return "⊘";
-    case "running": return "◐";
-    default: return "·";
-  }
-}
-
-function failureReasonLabel(kind: FailureKind, task?: TaskArtifact): string {
-  switch (kind) {
-    case "acceptance_failed": return "acceptance failed";
-    case "provider_transient": return "provider error (transient)";
-    case "provider_permanent": return "provider error";
-    case "launch_error": return "launch failed";
-    case "protocol_error": {
-      const errors = task?.workerReport?.errors ?? [];
-      if (errors.some((message) => /not valid JSON/i.test(message))) return "invalid task report";
-      return "protocol error";
-    }
-    case "worker_incomplete": {
-      const errors = task?.workerReport?.errors ?? [];
-      if (errors.some((message) => /No task report submitted|ENOENT.*task-report/i.test(message))) return "no task report";
-      const lastAttempt = task?.attempts?.[task.attempts.length - 1];
-      if (lastAttempt?.runtime?.stopReason === "thinking_only_stop") return "thinking-only stop";
-      return "worker incomplete";
-    }
-    case "worker_stalled": return "worker stalled";
-    case "provider_stalled": return "provider stalled";
-    case "unknown_stall": return "stalled";
-    case "audit_failed": return "audit failed";
-    case "aborted": return "aborted";
-    case "unknown": return "error";
-    default: return "";
-  }
+  return deriveTaskView(task).icon;
 }
 
 function truncate(text: string, max: number): string {
@@ -151,10 +87,10 @@ function summarizeTaskName(rawName: string | undefined, id: string): string {
 }
 
 function taskBody(task: TaskArtifact): string {
+  const view = deriveTaskView(task);
   const summary = truncate(summarizeTaskName(task.name, task.taskId), 60);
-  const finalStatus = task.finalStatus;
-  if (finalStatus === "error") {
-    const reason = failureReasonLabel(task.failureKind, task) || "error";
+  if (view.finalStatus === "error") {
+    const reason = view.failureReason || "error";
     return summary ? `${summary} · ${reason}` : reason;
   }
   // While a parent retry is in flight, surface it on the first line so the user
@@ -162,8 +98,8 @@ function taskBody(task: TaskArtifact): string {
   // attempts array already contains every settled previous attempt; it grows
   // before the next attempt starts, so the count of past attempts is at least
   // 1 by the time we render the retry hint.
-  if (task.status === "running" && (task.attempts?.length ?? 0) >= 1) {
-    const retryHint = `retry ${task.attempts.length + 1}`;
+  if (view.displayStatus === "running" && view.attempts >= 1) {
+    const retryHint = `retry ${view.attempts + 1}`;
     return summary ? `${summary} · ${retryHint}` : retryHint;
   }
   // For success / aborted / running / queued the body is the static task summary.
@@ -176,11 +112,11 @@ const TREE_INDENT = "   ";
 const TREE_MAX_ITEMS = 5;
 
 function shouldShowTree(task: TaskArtifact): boolean {
-  const finalStatus = task.finalStatus;
-  if (finalStatus === "success") return false;
-  if (finalStatus === "error" || finalStatus === "aborted") return Boolean(task.activity?.length);
+  const view = deriveTaskView(task);
+  if (view.finalStatus === "success") return false;
+  if (view.finalStatus === "error" || view.finalStatus === "aborted") return Boolean(task.activity?.length);
   // Mid-flight: show tree when a running task has any activity yet.
-  return task.status === "running" && Boolean(task.activity?.length);
+  return view.displayStatus === "running" && Boolean(task.activity?.length);
 }
 
 function compactTaskLine(task: TaskArtifact, idWidth: number): string {
@@ -256,7 +192,7 @@ function snapshotElapsed(batch: BatchArtifact, mode: SnapshotMode): string | und
 }
 
 function snapshotHeading(batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode): string {
-  const counts = countLifecycle(tasks);
+  const counts = countTaskLifecycle(tasks);
   const elapsed = snapshotElapsed(batch, mode);
   const total = tasks.length;
   const elapsedSuffix = elapsed ? ` · ${elapsed}` : "";
@@ -295,7 +231,7 @@ function paint(theme: SnapshotTheme, role: string, text: string): string {
 }
 
 function statusRole(task: TaskArtifact): { icon: string; idRole: string; bodyRole: string } {
-  switch (task.finalStatus ?? task.status) {
+  switch (deriveTaskView(task).displayStatus) {
     case "success": return { icon: "success", idRole: "muted", bodyRole: "muted" };
     case "error": return { icon: "error", idRole: "default", bodyRole: "error" };
     case "aborted": return { icon: "warning", idRole: "muted", bodyRole: "muted" };
@@ -359,7 +295,7 @@ function colorTaskBlock(theme: SnapshotTheme, task: TaskArtifact, idWidth: numbe
 }
 
 function colorHeading(theme: SnapshotTheme, batch: BatchArtifact, tasks: TaskArtifact[], mode: SnapshotMode): string {
-  const counts = countLifecycle(tasks);
+  const counts = countTaskLifecycle(tasks);
   const elapsed = snapshotElapsed(batch, mode);
   const total = tasks.length;
   const sep = paint(theme, "muted", "·");
@@ -433,7 +369,7 @@ function finalSnapshotMode(status: "success" | "error" | "aborted"): SnapshotMod
 }
 
 function buildFinalResultText(batch: BatchArtifact, tasks: TaskArtifact[], status: "success" | "error" | "aborted", summaryPath?: string): string {
-  const counts = countLifecycle(tasks);
+  const counts = countTaskLifecycle(tasks);
   const extras: string[] = [];
   if (summaryPath) extras.push(`summary: ${summaryPath}`);
   if (counts.error > 0) extras.push(`rerun failed: /tasks-ui rerun failed ${batch.batchId}`);
