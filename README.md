@@ -20,7 +20,7 @@ Tasks Supervisor V3 treats each task as a supervised task agent attempt.
 - The root process owns planning, scheduling, retry classification, acceptance checks, and synthesis.
 - Fan-out is explicit. The primary fan-out tool is `tasks_plan`: a compact `matrix + promptTemplate + acceptanceTemplate` payload that the extension expands locally into N supervised tasks. Inline `tasks` is a small-batch escape hatch (≤4 tasks, ≤8000 prompt bytes) and rejects oversized payloads with a pointer to `tasks_plan`.
 - Concurrency is explicit when capped: omitting `concurrency` runs every supplied leaf task concurrently; root agents should split large jobs into waves when they want phased execution. Dynamic throttling is opt-in via `throttle.enabled: true`.
-- Worker context is guarded separately from the parent session: child workers run single-shot `--no-session`, so the extension compacts oversized worker context with a child-only `context` hook before provider calls.
+- Each worker is a full child `pi --mode json -p --session <attempt>/session.jsonl` process with its own session/compaction boundary; the parent only supervises stdout JSONL, artifacts, and the structured report protocol.
 - Workers handle recoverable work-level errors themselves and submit `task-report.json`.
 - Parent retry is reserved for launch/session/provider transient failures that did not produce a valid report.
 - `success` requires runtime success, valid worker report, `completed` status, acceptance pass, and finalized audit artifacts.

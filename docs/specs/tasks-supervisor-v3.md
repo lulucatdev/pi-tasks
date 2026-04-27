@@ -51,6 +51,9 @@ Every run creates one batch directory:
   attempts/
     <taskId>/
       attempt-1/
+        session.jsonl
+        system-prompt.md
+        worker-prompt.md
         worker.md
         task-report.json
         stdout.jsonl
@@ -239,18 +242,19 @@ The parent does not retry by default for:
 
 `worker-runner.ts` owns process lifecycle, stdout/stderr artifacts, and timer actions. It should not grow more terminal classification rules inline.
 
-## Worker Context Management
+## Worker Child Sessions
 
-Pi's built-in auto-compaction is session-scoped. In `AgentSession`, compaction is checked before prompt submission and after `agent_end`; `pi-agent-core` emits `agent_end` only after the whole agent loop finishes. Task workers are launched as `pi --mode json -p --no-session`, so they use an in-memory single-shot session and may perform many assistant/tool turns before any `agent_end` compaction checkpoint. Root-session compaction therefore does not automatically protect worker context growth.
+Each attempt launches a full child Pi process, not an in-process pseudo-worker:
 
-The task extension registers a child-only `context` hook (`PI_CHILD_TYPE=task`) before returning from `index.ts`. Before each provider call in the worker, `worker-context.ts` estimates token usage against `ctx.model.contextWindow`. When the context crosses the guard threshold, it:
+```text
+pi --mode json -p --session <attemptDir>/session.jsonl --no-extensions --extension task-worker-runtime.ts @<attemptDir>/worker-prompt.md
+```
 
-- preserves the original worker prompt;
-- preserves a recent suffix, adjusted so no `toolResult` is kept without its assistant tool-call message;
-- replaces the middle history with a deterministic `custom` summary message;
-- writes a `progress` event to `worker-events.jsonl` with estimated before/after token counts.
+The child owns its own `AgentSession`, session file, provider retry, and Pi auto-compaction boundary. Root-session compaction does not mutate child context; the parent supervises the child by parsing stdout JSONL events and reading artifacts.
 
-The guard is deterministic and does not call another model. It prevents runaway tool-output accumulation inside a child worker, but it cannot fix an initially oversized task prompt. `tasks_plan` remains the primary defense against oversized launch payloads, and worker prompts instruct agents to use targeted reads, grep/search, offsets, and durable artifact notes instead of repeatedly loading huge files into context.
+`task-worker-runtime.ts` is intentionally tiny: it registers only the `task_report` tool. It does not register `task`, `tasks`, or `tasks_plan`, so children cannot recursively spawn more supervised workers through this runtime. The parent still passes `PI_TASK_ID`, `PI_TASK_ATTEMPT_ID`, `PI_TASK_REPORT_PATH`, and `PI_TASK_EVENTS_PATH` so the child can submit its structured report and telemetry.
+
+`worker-runner.ts` remains responsible for stdout/stderr artifacts, `worker-events.jsonl` telemetry extraction, terminal-state interpretation, post-exit drain/kill timers, and process aborts. Worker prompts still instruct agents to avoid huge dumps and use targeted reads, grep/search, offsets, and durable artifact notes instead of repeatedly loading huge files into context.
 
 ## UI and Rerun
 

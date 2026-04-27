@@ -80,7 +80,7 @@ export function buildTaskReportToolDefinition() {
 }
 
 export function registerTaskReportTool(pi: any): void {
-  if (!process.env.PI_CHILD_TYPE) return;
+  if (!process.env.PI_TASK_REPORT_PATH) return;
   const definition = buildTaskReportToolDefinition();
   pi.registerTool({
     ...definition,

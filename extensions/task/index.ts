@@ -16,8 +16,6 @@ import { listBatches, loadBatchDetail, renderAttemptDetailLines, renderBatchDeta
 import { registerTaskReportTool } from "./task-report-tool.ts";
 import { buildPlanStartingText, decoratePlanResultText, expandTasksPlan, validateTasksPlanInput, writePlanArtifact, type TasksPlanInput } from "./tasks-plan.ts";
 import type { TasksToolParams } from "./types.ts";
-import { appendWorkerEvent, buildWorkerEvent } from "./worker-events.ts";
-import { guardWorkerContext } from "./worker-context.ts";
 
 const MAX_TASKS = 100;
 
@@ -258,33 +256,9 @@ async function showTasksUi(args: string, ctx: ExtensionContext): Promise<void> {
   ctx.ui.notify([`Unknown tasks-ui subcommand: ${subcommand}`, ...renderTasksUiHelpLines()].join("\n"), "warning");
 }
 
-function registerWorkerContextGuard(pi: ExtensionAPI): void {
-  pi.on("context", async (event, ctx) => {
-    if (process.env.PI_CHILD_TYPE !== "task") return undefined;
-    const result = guardWorkerContext(event.messages, { contextWindow: ctx.model?.contextWindow });
-    if (!result.compacted) return undefined;
-    const taskId = process.env.PI_TASK_ID;
-    const attemptId = process.env.PI_TASK_ATTEMPT_ID;
-    const eventsPath = process.env.PI_TASK_EVENTS_PATH;
-    if (taskId && attemptId && eventsPath) {
-      await appendWorkerEvent(eventsPath, buildWorkerEvent({
-        type: "progress",
-        taskId,
-        attemptId,
-        message: `worker context compacted: ${result.droppedMessages} messages, ${result.tokensBefore} -> ${result.tokensAfter} est. tokens`,
-        data: { tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, droppedMessages: result.droppedMessages },
-      })).catch(() => undefined);
-    }
-    return { messages: result.messages };
-  });
-}
-
 export default function taskExtension(pi: ExtensionAPI) {
   registerTaskReportTool(pi);
-  if (process.env.PI_CHILD_TYPE) {
-    registerWorkerContextGuard(pi);
-    return;
-  }
+  if (process.env.PI_CHILD_TYPE) return;
 
   registerTasksStartCommand(pi);
 

@@ -127,6 +127,7 @@ export interface TaskAttemptRecord {
   finishedAt: string | null;
   cwd: string;
   attemptDir: string;
+  sessionPath?: string;
   workerLogPath: string;
   reportPath: string;
   stdoutPath: string;

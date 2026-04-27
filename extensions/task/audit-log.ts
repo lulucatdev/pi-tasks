@@ -26,6 +26,7 @@ export interface BatchPaths {
 
 export interface AttemptPaths {
   attemptDir: string;
+  sessionPath: string;
   workerLogPath: string;
   reportPath: string;
   stdoutPath: string;
@@ -94,6 +95,7 @@ export function buildAttemptPaths(paths: Pick<BatchPaths, "attemptsDir">, taskId
   const attemptDir = path.join(paths.attemptsDir, taskId, `attempt-${attemptIndex}`);
   return {
     attemptDir,
+    sessionPath: path.join(attemptDir, "session.jsonl"),
     workerLogPath: path.join(attemptDir, "worker.md"),
     reportPath: path.join(attemptDir, "task-report.json"),
     stdoutPath: path.join(attemptDir, "stdout.jsonl"),

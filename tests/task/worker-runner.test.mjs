@@ -55,6 +55,44 @@ test("runWorkerAttempt captures terminal assistant events and stdout/stderr arti
   assert.equal(await fs.readFile(paths.stderrPath, "utf-8"), "warn");
 });
 
+test("runWorkerAttempt launches a full child pi session with the worker runtime extension", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-session-"));
+  const paths = makePaths(root);
+  let capturedArgs;
+  let capturedOptions;
+  const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";
+
+  await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths,
+    spawnImpl: (_command, args, options) => {
+      capturedArgs = args;
+      capturedOptions = options;
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => true;
+      setImmediate(() => {
+        proc.stdout.emit("data", terminal);
+        proc.emit("close", 0);
+      });
+      return proc;
+    },
+  });
+
+  assert.ok(capturedArgs.includes("--session"));
+  assert.equal(capturedArgs[capturedArgs.indexOf("--session") + 1], paths.sessionPath);
+  assert.ok(capturedArgs.includes("--extension"));
+  assert.match(capturedArgs[capturedArgs.indexOf("--extension") + 1], /task-worker-runtime\.ts$/);
+  assert.equal(capturedArgs.includes("--no-session"), false);
+  assert.match(capturedArgs.at(-1), /^@.*worker-prompt\.md$/);
+  assert.equal(capturedOptions.env.PI_CHILD_TYPE, undefined);
+  assert.equal(capturedOptions.env.PI_TASK_REPORT_PATH, paths.reportPath);
+  assert.match(await fs.readFile(path.join(paths.attemptDir, "worker-prompt.md"), "utf-8"), /Task id: t001/);
+});
+
 test("runWorkerAttempt resolves when process exits before stdio close", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-post-exit-guard-"));
   const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";

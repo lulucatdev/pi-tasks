@@ -114,9 +114,9 @@ A worker must submit:
 
 The supervisor trusts the structured report, not natural language claims or legacy `TASK_STATUS` markers. Thinking-only final turns and missing reports are `worker_incomplete` and parent-retryable when no valid report was produced.
 
-## Worker context guard
+## Worker child sessions
 
-Child workers run as `pi --mode json -p --no-session`, so root-session auto-compaction does not protect a long worker loop in the same way it protects the interactive parent. The task extension therefore registers a child-only `context` hook. Before each provider call inside a worker, it estimates context size; if the request is near the model window, it preserves the original worker prompt and the latest assistant/tool-result suffix, replaces middle tool history with a deterministic compact summary, and records a `progress` event in `worker-events.jsonl`. This is not a replacement for good worker discipline: prompts still tell workers to avoid huge dumps, use targeted reads/greps, and write durable notes to files.
+Each worker attempt launches a full child Pi process: `pi --mode json -p --session <attemptDir>/session.jsonl --no-extensions --extension task-worker-runtime.ts`. The child owns its own session and Pi auto-compaction boundary; the parent does not mutate child context. The parent supervises stdout JSONL events, write telemetry, process lifecycle, and artifacts, while the small worker runtime extension only exposes `task_report`. Worker prompts still tell agents to avoid huge dumps and prefer targeted reads/greps plus durable notes to files.
 
 ## Acceptance contracts
 
@@ -154,8 +154,12 @@ tasks({
   plan.json                  # only present when tasks_plan was used
   tasks/<taskId>.json
   attempts/<taskId>/attempt-N/
+    session.jsonl
+    system-prompt.md
+    worker-prompt.md
     worker.md
     task-report.json
+    worker-events.jsonl
     stdout.jsonl
     stderr.txt
     attempt.json

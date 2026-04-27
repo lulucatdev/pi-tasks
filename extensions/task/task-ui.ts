@@ -282,6 +282,7 @@ export function renderTaskDetailLines(detail: BatchDetail, taskId: string): stri
     for (const line of [
       renderPath("worker log", attempt.workerLogPath),
       renderPath("report", attempt.reportPath),
+      renderPath("session", attempt.sessionPath),
       renderPath("stderr", attempt.stderrPath),
       renderPath("stdout", attempt.stdoutPath),
       renderPath("attempt", path.join(attempt.attemptDir, "attempt.json")),
@@ -322,6 +323,7 @@ export function renderAttemptDetailLines(detail: BatchDetail, taskId: string, at
   lines.push("", "Artifacts:");
   for (const line of [
     renderPath("attempt dir", attempt.attemptDir),
+    renderPath("session", attempt.sessionPath),
     renderPath("worker log", attempt.workerLogPath),
     renderPath("report", attempt.reportPath),
     renderPath("stdout", attempt.stdoutPath),

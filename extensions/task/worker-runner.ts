@@ -11,7 +11,7 @@ import { createTerminalRuntimeState, reduceTerminalRuntimeState } from "./termin
 import { appendWorkerEvent, createStdoutTelemetryState, extractStdoutTelemetry, workerEventsPathForAttempt } from "./worker-events.ts";
 import { buildWorkerPrompt, buildWorkerSystemPrompt } from "./worker-protocol.ts";
 
-const TASK_EXTENSION_ENTRYPOINT = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts");
+const TASK_WORKER_RUNTIME_ENTRYPOINT = path.join(path.dirname(fileURLToPath(import.meta.url)), "task-worker-runtime.ts");
 
 export interface AttemptRuntimeResult {
   attemptId: string;
@@ -110,21 +110,24 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
 
   await fs.mkdir(input.paths.attemptDir, { recursive: true });
   const systemPromptPath = path.join(input.paths.attemptDir, "system-prompt.md");
+  const workerPromptPath = path.join(input.paths.attemptDir, "worker-prompt.md");
+  const sessionPath = input.paths.sessionPath ?? path.join(input.paths.attemptDir, "session.jsonl");
   await fs.writeFile(systemPromptPath, buildWorkerSystemPrompt(), "utf-8");
+  await fs.writeFile(workerPromptPath, buildWorkerPrompt({
+    task: input.task,
+    attemptId: input.attemptId,
+    workerLogPath: input.paths.workerLogPath,
+    reportPath: input.paths.reportPath,
+  }), "utf-8");
   await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
   await fs.writeFile(input.paths.stderrPath, "", "utf-8");
   await fs.writeFile(input.paths.stdoutPath, "", "utf-8");
   await fs.writeFile(workerEventsPath, "", "utf-8");
 
-  const args = ["--no-extensions", "--extension", TASK_EXTENSION_ENTRYPOINT, "--mode", "json", "-p", "--no-session"];
+  const args = ["--no-extensions", "--extension", TASK_WORKER_RUNTIME_ENTRYPOINT, "--mode", "json", "-p", "--session", sessionPath];
   if (input.fallbackModel) args.push("--model", input.fallbackModel);
   if (input.fallbackThinking) args.push("--thinking", input.fallbackThinking);
-  args.push("--append-system-prompt", systemPromptPath, buildWorkerPrompt({
-    task: input.task,
-    attemptId: input.attemptId,
-    workerLogPath: input.paths.workerLogPath,
-    reportPath: input.paths.reportPath,
-  }));
+  args.push("--append-system-prompt", systemPromptPath, `@${workerPromptPath}`);
 
   let proc: SpawnedProcessLike;
   try {
@@ -132,7 +135,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       cwd: input.task.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...(input.env ?? process.env), PI_CHILD_TYPE: "task", PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPath },
+      env: { ...(input.env ?? process.env), PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPath },
     });
   } catch (error) {
     const finishedAt = new Date().toISOString();
@@ -316,6 +319,7 @@ export function buildAttemptRecord(input: {
     finishedAt: input.runtime.finishedAt,
     cwd: input.task.cwd,
     attemptDir: input.paths.attemptDir,
+    sessionPath: input.paths.sessionPath,
     workerLogPath: input.paths.workerLogPath,
     reportPath: input.paths.reportPath,
     stdoutPath: input.paths.stdoutPath,
