@@ -127,27 +127,31 @@ function truncate(text: string, max: number): string {
   return `${text.slice(0, Math.max(1, max - 1))}…`;
 }
 
-function activitySummaryFor(task: TaskArtifact, max = 60): string | undefined {
-  const items = task.activity ?? [];
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const label = items[index]?.label?.trim();
-    if (label) return truncate(label, max);
+function summarizeTaskName(rawName: string | undefined, id: string): string {
+  // Show the task name as a stable summary alongside the id. Strip the trailing
+  // ` ${id}` suffix that tasks_plan's default nameTemplate ('{{batchName}} {{id}}')
+  // appends, and ignore names that are just the id itself.
+  const name = rawName?.trim();
+  if (!name || name === id) return "";
+  const suffix = ` ${id}`;
+  if (name.endsWith(suffix)) {
+    const prefix = name.slice(0, name.length - suffix.length).trim();
+    return prefix;
   }
-  return undefined;
+  return name;
 }
 
 function taskBody(task: TaskArtifact): string {
+  const summary = truncate(summarizeTaskName(task.name, task.taskId), 60);
   const finalStatus = task.finalStatus;
   if (finalStatus === "error") {
     const reason = failureReasonLabel(task.failureKind) || "error";
-    return reason;
+    return summary ? `${summary} · ${reason}` : reason;
   }
-  if (finalStatus === "aborted") return "";
-  if (finalStatus === "success") return "";
-  // running or queued
-  const activity = activitySummaryFor(task);
-  if (activity) return activity;
-  return task.status === "queued" ? "" : "…";
+  // For success / aborted / running / queued the body is the static task summary.
+  // Live progress lives in the thinking-steps tree below; the first line keeps a
+  // stable identity instead of duplicating the latest activity.
+  return summary;
 }
 
 const TREE_INDENT = "   ";

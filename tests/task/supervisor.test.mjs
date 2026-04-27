@@ -449,6 +449,44 @@ test("executeSupervisedTasks final result text shows the per-task table with fin
   assert.match(result.text, /rerun failed: \/tasks-ui rerun failed /);
 });
 
+test("executeSupervisedTasks first-line body shows task summary not live activity", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-body-summary-"));
+  let runtimeSnapshot = "";
+  const result = await executeSupervisedTasks({
+    tasks: [
+      { id: "ch11-rerun", name: "Rerun MICRO102 ch11 fix from Oracle meta-review", prompt: "do" },
+      { id: "ch01", name: "ch01", prompt: "do" },
+      { id: "ch02", name: "oracle-chapter-fixes ch02", prompt: "do" },
+    ],
+    concurrency: 3,
+    retry: { maxAttempts: 1 },
+  }, { cwd: root, toolName: "tasks" }, {
+    onUpdate: (s) => { if (s.text.includes("◐")) runtimeSnapshot = s.text; },
+    runAttempt: async (input) => {
+      await input.onActivity?.({ at: "2026-04-26T00:00:00.500Z", taskId: input.task.id, attemptId: input.attemptId, kind: "tool", label: "Bash finished" });
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(result.batch.status, "success");
+  // First-line body keeps a stable summary (the task name with id-suffix stripped),
+  // never the latest activity.
+  assert.match(result.text, /✓\s+ch11-rerun\s+Rerun MICRO102 ch11 fix from Oracle meta-review/);
+  // ID-only name yields no body
+  assert.match(result.text, /^✓\s+ch01\s*$/m);
+  // tasks_plan-style auto name "<batchName> <id>" gets the trailing id stripped
+  assert.match(result.text, /✓\s+ch02\s+oracle-chapter-fixes/);
+  // Body must NOT echo the latest activity ("Bash finished" lives in the tree)
+  const ch01Line = result.text.split("\n").find((line) => /✓ {2}ch01/.test(line));
+  assert.ok(ch01Line, "ch01 line present");
+  assert.doesNotMatch(ch01Line, /Bash finished/);
+  // Live snapshot also keeps body == summary, not activity
+  if (runtimeSnapshot) {
+    const ch11Live = runtimeSnapshot.split("\n").find((line) => /◐ {2}ch11-rerun/.test(line));
+    if (ch11Live) assert.doesNotMatch(ch11Live, /Bash finished/);
+  }
+});
+
 test("executeSupervisedTasks renders per-task model/thinking meta and a thinking tree for failed tasks", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-meta-"));
   const result = await executeSupervisedTasks({
