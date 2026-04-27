@@ -485,6 +485,57 @@ test("executeSupervisedTasks shows 'no task report' when worker exits without wr
   assert.equal(result.tasks[0].retryability, "retryable");
 });
 
+test("executeSupervisedTasks live snapshot shows running icon, not stale ✗, while a retry is in flight", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-retry-snapshot-"));
+  let attempts = 0;
+  const seenDuringRetry = [];
+  const result = await executeSupervisedTasks({
+    tasks: [{ id: "ch09_ch10", name: "ch09_ch10", prompt: "do" }],
+    concurrency: 1,
+    retry: { maxAttempts: 2, backoffMs: { initial: 0, max: 0, multiplier: 1, jitter: false } },
+  }, { cwd: root, toolName: "tasks" }, {
+    onUpdate: (snapshot) => {
+      // Capture snapshots that show the second attempt active (only meaningful
+      // after attempt 1 has already settled with a failure that previously
+      // leaked into the live UI).
+      if (snapshot.batch.summary.total === 1 && snapshot.tasks[0]?.attempts?.length >= 1 && snapshot.tasks[0].status === "running") {
+        seenDuringRetry.push({
+          icon: snapshot.text.split("\n").find((line) => /ch09_ch10/.test(line)),
+          finalStatus: snapshot.tasks[0].finalStatus,
+          failureKind: snapshot.tasks[0].failureKind,
+        });
+      }
+    },
+    runAttempt: async (input) => {
+      attempts += 1;
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
+      if (attempts === 1) {
+        return {
+          attemptId: input.attemptId, taskId: input.task.id, status: "error", exitCode: 0,
+          stopReason: "thinking_only_stop", sawTerminalAssistantMessage: false,
+          stderrTail: "", stdoutMalformedLines: 0, failureKind: "worker_incomplete",
+          error: "thinking-only", startedAt: "2026-04-26T00:00:00.000Z", finishedAt: "2026-04-26T00:00:01.000Z",
+        };
+      }
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.batch.status, "success");
+  // While attempt 2 was running we must not have shown the previous attempt's
+  // ✗ icon or its 'no task report' / 'thinking-only stop' label.
+  assert.ok(seenDuringRetry.length > 0, "should emit at least one snapshot during the retry");
+  for (const snapshot of seenDuringRetry) {
+    assert.equal(snapshot.finalStatus, null, "finalStatus must reset to null while a retry is in flight");
+    assert.equal(snapshot.failureKind, "none", "failureKind must reset while a retry is in flight");
+    assert.ok(snapshot.icon && snapshot.icon.startsWith("◐"), `expected running icon, got: ${snapshot.icon}`);
+    assert.doesNotMatch(snapshot.icon ?? "", /✗/, "must not show ✗ while running a retry");
+    assert.doesNotMatch(snapshot.icon ?? "", /no task report|thinking-only stop|worker incomplete/, "must not echo previous failure reason while running");
+  }
+});
+
 test("executeSupervisedTasks parent-retries worker_incomplete attempts under default retry policy", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-incomplete-retry-"));
   let attempts = 0;

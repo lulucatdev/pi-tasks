@@ -23,6 +23,7 @@ import { normalizeThrottlePolicy, ThrottleController } from "./throttle.ts";
 import {
   deriveTaskFinalStatus,
   emptyAcceptance,
+  emptyWorkerReport,
   type AcceptanceOutcome,
   type BatchArtifact,
   type BatchSummary,
@@ -157,6 +158,15 @@ function taskBody(task: TaskArtifact): string {
   if (finalStatus === "error") {
     const reason = failureReasonLabel(task.failureKind, task) || "error";
     return summary ? `${summary} · ${reason}` : reason;
+  }
+  // While a parent retry is in flight, surface it on the first line so the user
+  // can tell 'attempt 2 in progress' apart from 'first attempt running'. The
+  // attempts array already contains every settled previous attempt; it grows
+  // before the next attempt starts, so the count of past attempts is at least
+  // 1 by the time we render the retry hint.
+  if (task.status === "running" && (task.attempts?.length ?? 0) >= 1) {
+    const retryHint = `retry ${task.attempts.length + 1}`;
+    return summary ? `${summary} · ${retryHint}` : retryHint;
   }
   // For success / aborted / running / queued the body is the static task summary.
   // Live progress lives in the thinking-steps tree below; the first line keeps a
@@ -599,6 +609,22 @@ async function settleTask(input: {
   taskArtifact.status = "running";
   taskArtifact.startedAt ??= now;
   taskArtifact.timeline.push({ at: now, state: "running", message: `Attempt ${input.attemptIndex} started` });
+  // When a retry starts, the previous attempt's terminal-state fields linger on
+  // the task artifact (finalStatus="error", failureKind="worker_incomplete",
+  // acceptance.status="failed", error message, etc.). The snapshot renderer
+  // resolves the icon as `task.finalStatus ?? task.status`, so without this
+  // reset the live UI keeps drawing ✗ + the previous failure reason while the
+  // new attempt is actively running. Reset to a clean running state; the
+  // settled outcome of THIS attempt will refill these fields below.
+  if (input.attemptIndex > 1) {
+    taskArtifact.finalStatus = null;
+    taskArtifact.failureKind = "none";
+    taskArtifact.retryability = "not_retryable";
+    taskArtifact.error = null;
+    taskArtifact.acceptance = emptyAcceptance("pending");
+    taskArtifact.workerReport = emptyWorkerReport();
+    taskArtifact.finishedAt = null;
+  }
   await writeTaskArtifact(input.batch, taskArtifact);
   await appendBatchEvent(input.batch.eventsPath, { schemaVersion: 1, seq: input.nextSeq(), at: now, type: "attempt_started", batchId: input.batch.batchId, taskId: input.task.id, attemptId });
   await emitSupervisorUpdate(input.batch, input.deps);
