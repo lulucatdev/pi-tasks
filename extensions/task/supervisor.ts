@@ -13,7 +13,7 @@ import {
   writeTaskArtifact,
   type AuditBatchHandle,
 } from "./audit-log.ts";
-import { evaluateAcceptance } from "./acceptance.ts";
+import { evaluateAcceptance, matchesPathPattern } from "./acceptance.ts";
 import { classifyAndDecide, classifyProtocolFailure, retryDecisionForFailure } from "./failure-classifier.ts";
 import { computeBackoffMs, normalizeRetryPolicy, shouldRetryAttempt } from "./retry.ts";
 import { normalizeTasksRun } from "./run-tasks.ts";
@@ -469,19 +469,8 @@ function hasWriteBoundary(task: NormalizedTaskSpec): boolean {
   return Boolean(task.acceptance?.allowedWritePaths?.length || task.acceptance?.forbiddenWritePaths?.length);
 }
 
-function compileGlobMatcher(pattern: string): RegExp {
-  const normalized = pattern.replace(/\\/g, "/");
-  const source = normalized
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "__DOUBLE_STAR__")
-    .replace(/\*/g, "[^/]*")
-    .replace(/__DOUBLE_STAR__/g, ".*");
-  return new RegExp(`^${source}$`);
-}
-
 function fileInAllowedZone(filePath: string, allowed: string[]): boolean {
-  const normalized = filePath.replace(/\\/g, "/");
-  return allowed.some((pattern) => compileGlobMatcher(pattern).test(normalized));
+  return allowed.some((pattern) => matchesPathPattern(filePath, pattern));
 }
 
 function filterFilesByAllowedZone(files: string[], task: NormalizedTaskSpec): string[] {

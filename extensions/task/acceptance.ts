@@ -8,17 +8,39 @@ function toPathCheck(value: string | PathCheck): PathCheck {
 
 function globToRegExp(pattern: string): RegExp {
   const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/[.+^${}()|[\]\\?]/g, "\\$&")
     .replace(/\*\*/g, "__DOUBLE_STAR__")
     .replace(/\*/g, "[^/]*")
     .replace(/__DOUBLE_STAR__/g, ".*");
   return new RegExp(`^${escaped}$`);
 }
 
-function matchesPattern(candidate: string, pattern: string): boolean {
-  const normalized = candidate.replace(/\\/g, "/");
-  const normalizedPattern = pattern.replace(/\\/g, "/");
+function normalizePatternPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function hasGlobMagic(pattern: string): boolean {
+  return pattern.includes("*");
+}
+
+function isSupervisorArtifactPath(relativePath: string): boolean {
+  const normalized = normalizePatternPath(relativePath);
+  return normalized.startsWith(".pi/tasks/") || normalized.includes("/.pi/tasks/");
+}
+
+export function matchesPathPattern(candidate: string, pattern: string): boolean {
+  const normalized = normalizePatternPath(candidate);
+  const normalizedPattern = normalizePatternPath(pattern);
+  // Treat trailing slash patterns as directory prefixes. Users naturally write
+  // allowedWritePaths: ["src/"] to mean "anything under src"; requiring
+  // "src/**" caused false acceptance failures in real batches.
+  if (normalizedPattern.endsWith("/")) return normalized.startsWith(normalizedPattern);
+  if (!hasGlobMagic(normalizedPattern)) return normalized === normalizedPattern;
   return globToRegExp(normalizedPattern).test(normalized);
+}
+
+function matchesPattern(candidate: string, pattern: string): boolean {
+  return matchesPathPattern(candidate, pattern);
 }
 
 function resolveCandidate(baseCwd: string, target: string): string {
@@ -134,14 +156,15 @@ function addRegexChecks(results: AcceptanceCheckResult[], name: string, text: st
 }
 
 function addChangedFileChecks(results: AcceptanceCheckResult[], contract: AcceptanceContract, changedFiles: string[]): void {
+  const auditableFiles = changedFiles.filter((file) => !isSupervisorArtifactPath(file));
   for (const pattern of contract.forbiddenWritePaths ?? contract.forbiddenPaths ?? []) {
-    for (const file of changedFiles) {
+    for (const file of auditableFiles) {
       if (matchesPattern(file, pattern)) results.push({ name: "forbiddenWritePaths", status: "failed", path: file, expected: pattern, message: `Changed file matches forbidden pattern: ${pattern}` });
     }
   }
 
   if (contract.allowedWritePaths?.length) {
-    for (const file of changedFiles) {
+    for (const file of auditableFiles) {
       if (!contract.allowedWritePaths.some((pattern) => matchesPattern(file, pattern))) {
         results.push({ name: "allowedWritePaths", status: "failed", path: file, message: "Changed file is outside allowed write paths." });
       }

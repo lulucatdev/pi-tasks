@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { evaluateAcceptance } from "../../extensions/task/acceptance.ts";
+import { evaluateAcceptance, matchesPathPattern } from "../../extensions/task/acceptance.ts";
 
 function report(overrides = {}) {
   return {
@@ -98,6 +98,15 @@ test("evaluateAcceptance handles inline case-insensitive regex flags and invalid
   assert.ok(invalid.errors.some((error) => error.includes("Invalid required regex")));
 });
 
+test("matchesPathPattern supports exact, glob, and trailing-slash directory allowlist patterns", () => {
+  assert.equal(matchesPathPattern("allowed/out.md", "allowed/"), true);
+  assert.equal(matchesPathPattern("allowed/nested/out.md", "allowed/"), true);
+  assert.equal(matchesPathPattern("allowed/out.md", "allowed/**"), true);
+  assert.equal(matchesPathPattern("allowed/out.md", "allowed/out.md"), true);
+  assert.equal(matchesPathPattern("allowed/out.md", "allowed"), false);
+  assert.equal(matchesPathPattern("allowedness/out.md", "allowed/"), false);
+});
+
 test("evaluateAcceptance audits changed files against write allowlist and forbidden paths", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-acceptance-write-"));
   const result = await evaluateAcceptance({
@@ -106,14 +115,32 @@ test("evaluateAcceptance audits changed files against write allowlist and forbid
     report: report(),
     changedFiles: ["allowed/out.md", "secret/token.txt"],
     contract: {
-      allowedWritePaths: ["allowed/**"],
-      forbiddenWritePaths: ["secret/**"],
+      allowedWritePaths: ["allowed/"],
+      forbiddenWritePaths: ["secret/"],
     },
   });
 
   assert.equal(result.status, "failed");
   assert.ok(result.errors.some((error) => error.includes("secret/token.txt")));
   assert.ok(result.errors.some((error) => error.includes("outside allowed")));
+});
+
+test("evaluateAcceptance ignores supervisor protocol artifacts in write-boundary checks", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-acceptance-artifacts-"));
+  const result = await evaluateAcceptance({
+    cwd: root,
+    workerLog: "done",
+    report: report(),
+    changedFiles: ["src/out.md"],
+    observedWritePaths: [
+      "src/telemetry.md",
+      ".pi/tasks/2026-04-27T00-00-00-000Z-test/attempts/t001/attempt-1/worker.md",
+      ".pi/tasks/2026-04-27T00-00-00-000Z-test/attempts/t001/attempt-1/task-report.json",
+    ],
+    contract: { allowedWritePaths: ["src/"] },
+  });
+
+  assert.equal(result.status, "passed");
 });
 
 test("evaluateAcceptance can downgrade failures to warnings in auditOnly mode", async () => {
