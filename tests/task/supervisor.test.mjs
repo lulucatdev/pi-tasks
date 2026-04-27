@@ -449,6 +449,40 @@ test("executeSupervisedTasks final result text shows the per-task table with fin
   assert.match(result.text, /rerun failed: \/tasks-ui rerun failed /);
 });
 
+test("executeSupervisedTasks shows 'no task report' when worker exits without writing task-report.json", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-no-report-"));
+  const result = await executeSupervisedTasks({
+    tasks: [{ id: "ch09_ch10", name: "Content QA MICRO102 ch09-ch10", prompt: "do" }],
+    concurrency: 1,
+    retry: { maxAttempts: 1 },
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      // Simulate a worker that ran cleanly but never produced task-report.json or worker.md.
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
+      return {
+        attemptId: input.attemptId,
+        taskId: input.task.id,
+        status: "success",
+        exitCode: 0,
+        stopReason: "stop",
+        sawTerminalAssistantMessage: true,
+        stderrTail: "",
+        stdoutMalformedLines: 0,
+        failureKind: "none",
+        error: null,
+        startedAt: "2026-04-26T00:00:00.000Z",
+        finishedAt: "2026-04-26T00:00:01.000Z",
+      };
+    },
+  });
+
+  assert.equal(result.batch.status, "error");
+  assert.equal(result.tasks[0].failureKind, "protocol_error");
+  assert.match(result.tasks[0].workerReport.errors.join("\n"), /No task report submitted/);
+  assert.match(result.text, /✗\s+ch09_ch10\s+Content QA MICRO102 ch09-ch10 · no task report/);
+});
+
 test("executeSupervisedTasks first-line body shows task summary not live activity", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-body-summary-"));
   let runtimeSnapshot = "";

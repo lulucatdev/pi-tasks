@@ -92,7 +92,14 @@ export async function readTaskReport(reportPath: string, expected?: { taskId?: s
     const raw = await fs.readFile(reportPath, "utf-8");
     return validateTaskReport(JSON.parse(raw), expected);
   } catch (error) {
-    return { ok: false, errors: [`Could not read task report: ${error instanceof Error ? error.message : String(error)}`] };
+    const reason = error instanceof Error ? error.message : String(error);
+    if (/ENOENT|no such file/i.test(reason)) {
+      return { ok: false, errors: ["No task report submitted: the worker ended its turn without calling task_report or writing task-report.json"] };
+    }
+    if (error instanceof SyntaxError) {
+      return { ok: false, errors: [`Task report is not valid JSON: ${reason}`] };
+    }
+    return { ok: false, errors: [`Could not read task report: ${reason}`] };
   }
 }
 
@@ -102,9 +109,11 @@ export function buildWorkerSystemPrompt(): string {
     "You may read, write, edit, and run commands needed for the assigned work.",
     "Handle recoverable work errors yourself before reporting final status.",
     "Do not spawn nested task/tasks workers.",
-    "You must write a human-readable worker.md log and a machine-readable task-report.json file to the exact paths in the prompt.",
-    "The task-report.json file is the only completion protocol the supervisor trusts.",
-    "If you cannot fully finish, report status blocked, partial, or error with evidence and userActionRequired when relevant.",
+    "Submission is mandatory. Before your final assistant turn ends you must call the task_report tool with a structured report. If task_report is unavailable, write the same JSON to the exact task-report.json path given in the user prompt. Without that submission the supervisor classifies your run as 'no task report' and the whole task fails — even if all other work succeeded.",
+    "Also write a human-readable worker.md log to the path given in the user prompt; never end with worker.md empty.",
+    "The structured task-report.json (or task_report tool call) is the only completion protocol the supervisor trusts. Status text in chat does not count.",
+    "If you cannot fully finish the work, still submit task_report with status partial, blocked, or error, plus evidence and userActionRequired when relevant. Always submit something.",
+    "Final-turn checklist before stopping: (1) called task_report (or wrote task-report.json), (2) wrote worker.md, (3) any required output artifacts the user prompt asked for exist on disk.",
   ].join("\n");
 }
 
@@ -137,7 +146,12 @@ export function buildWorkerPrompt(input: {
     "Task prompt:",
     input.task.prompt,
     "",
-    "Write the final task-report.json with this shape:",
+    "Submission protocol (mandatory):",
+    `1. Before ending your final assistant turn, call the task_report tool with the JSON shape below. If task_report is unavailable, use write to put the same JSON at the task report path above.`,
+    `2. Also use write to populate the worker log path with a short human-readable summary; do not leave it empty.`,
+    `3. Do not stop without doing both. The supervisor classifies a missing or empty task-report as 'no task report' and the task fails.`,
+    "",
+    "task-report.json shape:",
     JSON.stringify(reportExample, null, 2),
   ].join("\n");
 }

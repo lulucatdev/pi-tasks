@@ -104,13 +104,18 @@ function statusIcon(task: TaskArtifact): string {
   }
 }
 
-function failureReasonLabel(kind: FailureKind): string {
+function failureReasonLabel(kind: FailureKind, task?: TaskArtifact): string {
   switch (kind) {
     case "acceptance_failed": return "acceptance failed";
     case "provider_transient": return "provider error (transient)";
     case "provider_permanent": return "provider error";
     case "launch_error": return "launch failed";
-    case "protocol_error": return "protocol error";
+    case "protocol_error": {
+      const errors = task?.workerReport?.errors ?? [];
+      if (errors.some((message) => /No task report submitted/i.test(message))) return "no task report";
+      if (errors.some((message) => /not valid JSON/i.test(message))) return "invalid task report";
+      return "protocol error";
+    }
     case "worker_incomplete": return "worker incomplete";
     case "worker_stalled": return "worker stalled";
     case "provider_stalled": return "provider stalled";
@@ -145,7 +150,7 @@ function taskBody(task: TaskArtifact): string {
   const summary = truncate(summarizeTaskName(task.name, task.taskId), 60);
   const finalStatus = task.finalStatus;
   if (finalStatus === "error") {
-    const reason = failureReasonLabel(task.failureKind) || "error";
+    const reason = failureReasonLabel(task.failureKind, task) || "error";
     return summary ? `${summary} · ${reason}` : reason;
   }
   // For success / aborted / running / queued the body is the static task summary.
