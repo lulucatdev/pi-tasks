@@ -257,8 +257,8 @@ async function showTasksUi(args: string, ctx: ExtensionContext): Promise<void> {
 }
 
 export default function taskExtension(pi: ExtensionAPI) {
-  registerTaskReportTool(pi);
   if (process.env.PI_CHILD_TYPE) return;
+  registerTaskReportTool(pi);
 
   registerTasksStartCommand(pi);
 

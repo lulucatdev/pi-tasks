@@ -100,6 +100,7 @@ test("runWorkerAttempt creates worker event channel path and exposes env", async
   assert.ok(seenArgs.some((arg) => String(arg).endsWith("extensions/task/task-worker-runtime.ts")));
   assert.ok(seenArgs.includes("--session"));
   assert.equal(seenArgs[seenArgs.indexOf("--session") + 1], paths.sessionPath);
+  assert.equal(seenEnv.PI_CHILD_TYPE, "task-worker");
   assert.equal(seenEnv.PI_TASK_EVENTS_PATH, workerEventsPathForAttempt(paths.attemptDir));
   assert.equal(await fs.readFile(workerEventsPathForAttempt(paths.attemptDir), "utf-8"), "");
 });

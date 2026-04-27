@@ -135,7 +135,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       cwd: input.task.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...(input.env ?? process.env), PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPath },
+      env: { ...(input.env ?? process.env), PI_CHILD_TYPE: "task-worker", PI_TASK_ID: input.task.id, PI_TASK_ATTEMPT_ID: input.attemptId, PI_TASK_REPORT_PATH: input.paths.reportPath, PI_TASK_EVENTS_PATH: workerEventsPath },
     });
   } catch (error) {
     const finishedAt = new Date().toISOString();
@@ -177,6 +177,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     let settled = false;
     let abortTimer: NodeJS.Timeout | undefined;
     let terminalTimer: NodeJS.Timeout | undefined;
+    let terminalForceKillTimer: NodeJS.Timeout | undefined;
     let postExitTimer: NodeJS.Timeout | undefined;
     let abortHandler: (() => void) | undefined;
 
@@ -185,6 +186,7 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       settled = true;
       if (abortTimer) clearTimeout(abortTimer);
       if (terminalTimer) clearTimeout(terminalTimer);
+      if (terminalForceKillTimer) clearTimeout(terminalForceKillTimer);
       if (postExitTimer) clearTimeout(postExitTimer);
       if (input.signal && abortHandler) input.signal.removeEventListener("abort", abortHandler);
       resolve(code);
@@ -194,9 +196,11 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       if (terminalTimer || settled) return;
       terminalTimer = setTimeout(() => {
         proc.kill("SIGTERM");
-        const forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
-        forceKillTimer.unref?.();
-        finish(0);
+        terminalForceKillTimer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          finish(0);
+        }, input.abortKillDelayMs ?? 5000);
+        terminalForceKillTimer.unref?.();
       }, input.terminalExitGraceMs ?? 30000);
       terminalTimer.unref?.();
     };

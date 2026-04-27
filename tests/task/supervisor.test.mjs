@@ -485,6 +485,38 @@ test("executeSupervisedTasks shows 'no task report' when worker exits without wr
   assert.equal(result.tasks[0].retryability, "retryable");
 });
 
+test("executeSupervisedTasks fails exit-0 workers that produce no terminal event or task report", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-exit0-no-report-"));
+  const result = await executeSupervisedTasks({
+    tasks: [{ id: "silent", name: "silent worker", prompt: "do" }],
+    concurrency: 1,
+    retry: { maxAttempts: 1 },
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
+      return {
+        attemptId: input.attemptId,
+        taskId: input.task.id,
+        status: "success",
+        exitCode: 0,
+        sawTerminalAssistantMessage: false,
+        stderrTail: "",
+        stdoutMalformedLines: 0,
+        failureKind: "none",
+        error: null,
+        startedAt: "2026-04-26T00:00:00.000Z",
+        finishedAt: "2026-04-26T00:00:01.000Z",
+      };
+    },
+  });
+
+  assert.equal(result.batch.status, "error");
+  assert.equal(result.tasks[0].finalStatus, "error");
+  assert.equal(result.tasks[0].failureKind, "worker_incomplete");
+  assert.match(result.tasks[0].workerReport.errors.join("\n"), /No task report submitted/);
+});
+
 test("executeSupervisedTasks live snapshot shows running icon, not stale ✗, while a retry is in flight", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-retry-snapshot-"));
   let attempts = 0;

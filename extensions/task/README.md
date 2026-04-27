@@ -167,6 +167,8 @@ tasks({
 
 `summary.md` is the quickest human entry point after a run. When `tasks_plan` ran the batch, `plan.json` records the matrix, templates, taskNames, and optional experimental synthesis metadata that produced it.
 
+Treat `.pi/tasks/**` as a sensitive local audit directory. It can contain full worker prompts, system prompt fragments, child `session.jsonl` transcripts, stdout/stderr, file paths, and structured reports. Do not publish or attach it wholesale without reviewing/redacting it first.
+
 ## Artifact UI
 
 ```text

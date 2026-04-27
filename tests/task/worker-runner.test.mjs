@@ -88,9 +88,39 @@ test("runWorkerAttempt launches a full child pi session with the worker runtime 
   assert.match(capturedArgs[capturedArgs.indexOf("--extension") + 1], /task-worker-runtime\.ts$/);
   assert.equal(capturedArgs.includes("--no-session"), false);
   assert.match(capturedArgs.at(-1), /^@.*worker-prompt\.md$/);
-  assert.equal(capturedOptions.env.PI_CHILD_TYPE, undefined);
+  assert.equal(capturedOptions.env.PI_CHILD_TYPE, "task-worker");
   assert.equal(capturedOptions.env.PI_TASK_REPORT_PATH, paths.reportPath);
   assert.match(await fs.readFile(path.join(paths.attemptDir, "worker-prompt.md"), "utf-8"), /Task id: t001/);
+});
+
+test("runWorkerAttempt passes @worker-prompt path with spaces unchanged", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi worker special path "));
+  const paths = makePaths(root);
+  let capturedArgs;
+  const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";
+
+  await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths,
+    spawnImpl: (_command, args) => {
+      capturedArgs = args;
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => true;
+      setImmediate(() => {
+        proc.stdout.emit("data", terminal);
+        proc.emit("close", 0);
+      });
+      return proc;
+    },
+  });
+
+  const promptArg = capturedArgs.at(-1);
+  assert.equal(promptArg, `@${path.join(paths.attemptDir, "worker-prompt.md")}`);
+  assert.match(promptArg, / /);
 });
 
 test("runWorkerAttempt resolves when process exits before stdio close", async () => {
@@ -128,6 +158,7 @@ test("runWorkerAttempt stops workers that stay open after terminal output", asyn
     attemptIndex: 1,
     paths: makePaths(root),
     terminalExitGraceMs: 1,
+    abortKillDelayMs: 1,
     spawnImpl: () => {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
@@ -143,6 +174,41 @@ test("runWorkerAttempt stops workers that stay open after terminal output", asyn
 
   assert.equal(result.status, "success");
   assert.equal(killed, true);
+});
+
+test("runWorkerAttempt drains stdout emitted after terminal SIGTERM before close", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-terminal-drain-"));
+  const paths = makePaths(root);
+  const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } }) + "\n";
+  const signals = [];
+  const result = await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths,
+    terminalExitGraceMs: 1,
+    abortKillDelayMs: 50,
+    spawnImpl: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGTERM") {
+          proc.stdout.emit("data", "after-term\n");
+          setImmediate(() => proc.emit("close", 0));
+        }
+        return true;
+      };
+      setImmediate(() => proc.stdout.emit("data", terminal));
+      return proc;
+    },
+  });
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.match(await fs.readFile(paths.stdoutPath, "utf-8"), /after-term/);
+  assert.equal(result.stdoutMalformedLines, 1);
 });
 
 test("runWorkerAttempt hard-stops aborted workers that ignore SIGTERM", async () => {
@@ -182,6 +248,7 @@ test("runWorkerAttempt classifies thinking-only stop as worker_incomplete, not s
     attemptIndex: 1,
     paths: makePaths(root),
     terminalExitGraceMs: 1,
+    abortKillDelayMs: 1,
     spawnImpl: () => {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();

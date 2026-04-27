@@ -38,6 +38,8 @@ Batch artifacts live under:
   attempts/<taskId>/attempt-N/
 ```
 
+`.pi/tasks/**` is a sensitive audit directory and may include full prompts, child sessions, stdout/stderr, and local paths.
+
 ## Artifact UI
 
 Use `/tasks-ui` to navigate persisted artifacts:

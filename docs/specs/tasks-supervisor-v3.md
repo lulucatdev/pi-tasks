@@ -64,6 +64,8 @@ Every run creates one batch directory:
 
 `batchId` is sortable timestamp plus random suffix. `taskId` is batch-local and sanitized.
 
+Security note: `.pi/tasks/**` is an audit store, not a sanitized export. It may contain prompts, child `session.jsonl` transcripts, stdout/stderr, absolute paths, report evidence, and other private context. Users should review/redact before sharing the directory.
+
 ## Worker Completion Protocol
 
 A worker receives exact paths for:
