@@ -13,7 +13,7 @@ export interface NormalizedRetryPolicy {
 
 export const DEFAULT_PARENT_RETRY_POLICY: NormalizedRetryPolicy = {
   maxAttempts: 2,
-  retryOn: ["launch_error", "provider_transient", "provider_stalled"],
+  retryOn: ["launch_error", "provider_transient", "provider_stalled", "worker_stalled", "worker_incomplete"],
   backoffMs: { initial: 1500, max: 15000, multiplier: 2, jitter: true },
 };
 

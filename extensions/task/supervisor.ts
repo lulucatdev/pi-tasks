@@ -112,11 +112,16 @@ function failureReasonLabel(kind: FailureKind, task?: TaskArtifact): string {
     case "launch_error": return "launch failed";
     case "protocol_error": {
       const errors = task?.workerReport?.errors ?? [];
-      if (errors.some((message) => /No task report submitted/i.test(message))) return "no task report";
       if (errors.some((message) => /not valid JSON/i.test(message))) return "invalid task report";
       return "protocol error";
     }
-    case "worker_incomplete": return "worker incomplete";
+    case "worker_incomplete": {
+      const errors = task?.workerReport?.errors ?? [];
+      if (errors.some((message) => /No task report submitted|ENOENT.*task-report/i.test(message))) return "no task report";
+      const lastAttempt = task?.attempts?.[task.attempts.length - 1];
+      if (lastAttempt?.runtime?.stopReason === "thinking_only_stop") return "thinking-only stop";
+      return "worker incomplete";
+    }
     case "worker_stalled": return "worker stalled";
     case "provider_stalled": return "provider stalled";
     case "unknown_stall": return "stalled";

@@ -131,6 +131,115 @@ test("runWorkerAttempt hard-stops aborted workers that ignore SIGTERM", async ()
   assert.equal(result.failureKind, "aborted");
 });
 
+test("runWorkerAttempt classifies thinking-only stop as worker_incomplete, not success", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-thinking-only-"));
+  const terminal = JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "..." }] },
+  }) + "\n";
+
+  const result = await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths: makePaths(root),
+    terminalExitGraceMs: 1,
+    spawnImpl: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => true;
+      setImmediate(() => proc.stdout.emit("data", terminal));
+      return proc;
+    },
+  });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.failureKind, "worker_incomplete");
+  assert.equal(result.stopReason, "thinking_only_stop");
+  assert.equal(result.sawTerminalAssistantMessage, false);
+  assert.match(result.error, /thinking-only content/);
+});
+
+test("runWorkerAttempt cancels terminal exit guard when CLI emits auto_retry_start after error", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-auto-retry-"));
+  const errorTerminal = JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "error", errorMessage: "terminated", content: [{ type: "thinking", thinking: "..." }] },
+  }) + "\n";
+  const autoRetry = JSON.stringify({ type: "auto_retry_start" }) + "\n";
+  const recovered = JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+  }) + "\n";
+  let killed = false;
+
+  const result = await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths: makePaths(root),
+    // Tight grace; if the runner failed to cancel after auto_retry, the test
+    // would observe killed=true even though the CLI was recovering.
+    terminalExitGraceMs: 50,
+    spawnImpl: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => { killed = true; return true; };
+      setImmediate(async () => {
+        proc.stdout.emit("data", errorTerminal);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        proc.stdout.emit("data", autoRetry);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        proc.stdout.emit("data", recovered);
+        proc.emit("close", 0);
+      });
+      return proc;
+    },
+  });
+
+  assert.equal(killed, false, "parent must not SIGTERM the worker while CLI is auto-retrying");
+  assert.equal(result.status, "success");
+  assert.equal(result.sawTerminalAssistantMessage, true);
+  assert.notEqual(result.stopReason, "error");
+  assert.equal(result.failureKind, "none");
+});
+
+test("runWorkerAttempt does not schedule terminal exit guard on bare stopReason=error (CLI may still close)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-error-no-guard-"));
+  const errorTerminal = JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "error", errorMessage: "terminated", content: [{ type: "thinking", thinking: "..." }] },
+  }) + "\n";
+  let killed = false;
+
+  const result = await runWorkerAttempt({
+    task: makeTask(),
+    attemptId: "t001-a1",
+    attemptIndex: 1,
+    paths: makePaths(root),
+    terminalExitGraceMs: 30,
+    spawnImpl: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => { killed = true; return true; };
+      setImmediate(async () => {
+        proc.stdout.emit("data", errorTerminal);
+        // Wait longer than the terminal grace window. The runner must NOT kill.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        proc.emit("close", 1);
+      });
+      return proc;
+    },
+  });
+
+  assert.equal(killed, false, "no SIGTERM after a bare error terminal; rely on natural process close");
+  assert.equal(result.status, "error");
+  assert.equal(result.stopReason, "error");
+});
+
 test("runWorkerAttempt treats terminal stopReason error as runtime failure", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-worker-stop-error-"));
   const terminal = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error" } }) + "\n";

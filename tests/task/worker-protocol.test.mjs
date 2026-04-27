@@ -32,8 +32,12 @@ test("validateTaskReport rejects wrong task id and malformed evidence", () => {
 
 test("worker prompts require worker.md and task-report.json", () => {
   const system = buildWorkerSystemPrompt();
-  assert.match(system, /task-report\.json/);
-  assert.match(system, /only completion protocol/);
+  assert.match(system, /task-report\.json|task_report/);
+  assert.match(system, /only completion protocol/i);
+  // The system prompt must explicitly call out the thinking-only failure mode
+  // so the model knows ending with only thinking content fails the task.
+  assert.match(system, /thinking-only/i);
+  assert.match(system, /no task report/i);
 
   const prompt = buildWorkerPrompt({
     task: { id: "t001", name: "demo", prompt: "Do it", cwd: "/tmp" },
@@ -44,4 +48,7 @@ test("worker prompts require worker.md and task-report.json", () => {
   assert.match(prompt, /Worker log path: \/tmp\/worker\.md/);
   assert.match(prompt, /Task report path: \/tmp\/task-report\.json/);
   assert.match(prompt, /"taskId": "t001"/);
+  // Per-task body must mention the submission protocol and the no-thinking-only rule.
+  assert.match(prompt, /Submission protocol/);
+  assert.match(prompt, /thinking-only/i);
 });

@@ -39,6 +39,7 @@ export function classifyRuntimeFailure(input: RuntimeOutcome & { error?: string 
   if (input.status === "aborted") return "aborted";
   if (input.status === "success") return "none";
   if (input.failureKind === "launch_error") return "launch_error";
+  if (input.failureKind === "worker_incomplete" || input.stopReason === "thinking_only_stop") return "worker_incomplete";
 
   const text = textOf(input);
   if (PERMANENT_PATTERNS.some((pattern) => pattern.test(text))) return "provider_permanent";
@@ -48,7 +49,14 @@ export function classifyRuntimeFailure(input: RuntimeOutcome & { error?: string 
 }
 
 export function classifyProtocolFailure(errors: string[]): FailureKind {
-  return errors.length > 0 ? "protocol_error" : "none";
+  if (!errors.length) return "none";
+  // Worker that ran cleanly but never submitted a task report is "incomplete" rather
+  // than a hard protocol error: thinking-only stops, hung turns, etc. are typically
+  // transient model behavior, so we want the parent to retry once before giving up.
+  if (errors.some((message) => /No task report submitted|ENOENT|task-report\.json/i.test(message))) {
+    return "worker_incomplete";
+  }
+  return "protocol_error";
 }
 
 export function classifyAcceptanceFailure(failed: boolean): FailureKind {
@@ -56,7 +64,13 @@ export function classifyAcceptanceFailure(failed: boolean): FailureKind {
 }
 
 export function retryDecisionForFailure(kind: FailureKind, status?: RuntimeStatus): RetryDecision {
-  if (kind === "launch_error" || kind === "provider_transient" || kind === "provider_stalled" || kind === "worker_stalled") {
+  if (
+    kind === "launch_error"
+    || kind === "provider_transient"
+    || kind === "provider_stalled"
+    || kind === "worker_stalled"
+    || kind === "worker_incomplete"
+  ) {
     return { retryability: "retryable", failureKind: kind, reason: `${kind} is parent-retryable` };
   }
   if (kind === "unknown" && status === "error") {

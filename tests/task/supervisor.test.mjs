@@ -478,9 +478,44 @@ test("executeSupervisedTasks shows 'no task report' when worker exits without wr
   });
 
   assert.equal(result.batch.status, "error");
-  assert.equal(result.tasks[0].failureKind, "protocol_error");
+  assert.equal(result.tasks[0].failureKind, "worker_incomplete");
   assert.match(result.tasks[0].workerReport.errors.join("\n"), /No task report submitted/);
   assert.match(result.text, /✗\s+ch09_ch10\s+Content QA MICRO102 ch09-ch10 · no task report/);
+  // worker_incomplete is parent-retryable by default; the test pins maxAttempts=1 so it stays at one attempt.
+  assert.equal(result.tasks[0].retryability, "retryable");
+});
+
+test("executeSupervisedTasks parent-retries worker_incomplete attempts under default retry policy", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-supervisor-incomplete-retry-"));
+  let attempts = 0;
+  const result = await executeSupervisedTasks({
+    tasks: [{ id: "ch09_ch10", name: "ch09_ch10", prompt: "do" }],
+    concurrency: 1,
+    retry: { maxAttempts: 2, backoffMs: { initial: 0, max: 0, multiplier: 1, jitter: false } },
+  }, { cwd: root, toolName: "tasks" }, {
+    runAttempt: async (input) => {
+      attempts += 1;
+      await fs.mkdir(input.paths.attemptDir, { recursive: true });
+      await fs.writeFile(input.paths.workerLogPath, "", "utf-8");
+      if (attempts === 1) {
+        // First attempt: thinking-only stop, no report submitted.
+        return {
+          attemptId: input.attemptId, taskId: input.task.id, status: "error", exitCode: 0,
+          stopReason: "thinking_only_stop", sawTerminalAssistantMessage: false,
+          stderrTail: "", stdoutMalformedLines: 0, failureKind: "worker_incomplete",
+          error: "assistant ended its turn with thinking-only content (no text or tool call)",
+          startedAt: "2026-04-26T00:00:00.000Z", finishedAt: "2026-04-26T00:00:01.000Z",
+        };
+      }
+      // Second attempt: clean success.
+      return successAttempt(input);
+    },
+  });
+
+  assert.equal(attempts, 2, "should retry once");
+  assert.equal(result.batch.status, "success");
+  assert.equal(result.tasks[0].finalStatus, "success");
+  assert.equal(result.tasks[0].attempts.length, 2);
 });
 
 test("executeSupervisedTasks first-line body shows task summary not live activity", async () => {

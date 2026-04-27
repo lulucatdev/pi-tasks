@@ -51,14 +51,54 @@ export interface RunWorkerAttemptInput {
   onActivity?: (activity: TaskActivityItem) => void | Promise<void>;
 }
 
-function isTerminalAssistantEvent(event: unknown): { terminal: boolean; stopReason?: string; errorMessage?: string } {
+interface TerminalAssistantInfo {
+  terminal: boolean;
+  stopReason?: string;
+  errorMessage?: string;
+  hasText?: boolean;
+  thinkingOnly?: boolean;
+}
+
+function hasVisibleAssistantText(message: any): boolean {
+  return Array.isArray(message?.content) && message.content.some((part: any) =>
+    part?.type === "text" && typeof part.text === "string" && part.text.trim().length > 0
+  );
+}
+
+function isThinkingOnlyAssistantMessage(message: any): boolean {
+  return Array.isArray(message?.content)
+    && message.content.length > 0
+    && message.content.every((part: any) => part?.type === "thinking");
+}
+
+function isTerminalAssistantEvent(event: unknown): TerminalAssistantInfo {
   if (!event || typeof event !== "object") return { terminal: false };
   const record = event as Record<string, any>;
   if (record.type !== "message_end" || !record.message) return { terminal: false };
   const message = record.message;
   if (message.role !== "assistant") return { terminal: false };
   if (!message.stopReason || message.stopReason === "toolUse") return { terminal: false };
-  return { terminal: true, stopReason: message.stopReason, errorMessage: message.errorMessage };
+  return {
+    terminal: true,
+    stopReason: message.stopReason,
+    errorMessage: message.errorMessage,
+    hasText: hasVisibleAssistantText(message),
+    thinkingOnly: isThinkingOnlyAssistantMessage(message),
+  };
+}
+
+const RECOVERY_RESET_TYPES = new Set([
+  "auto_retry_start",
+  "agent_start",
+  "turn_start",
+  "tool_execution_start",
+  "message_start",
+]);
+
+function isRecoveryStartEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const type = (event as Record<string, unknown>).type;
+  return typeof type === "string" && RECOVERY_RESET_TYPES.has(type);
 }
 
 function tail(text: string, max = 4000): string {
@@ -161,6 +201,8 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
     };
   }
 
+  let cancelTerminalExitGuard = () => {};
+
   const parseLine = (line: string) => {
     if (!line.trim()) return;
     try {
@@ -169,12 +211,44 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
       if (workerActivity) queueActivity(workerActivity);
       const telemetryEvents = extractStdoutTelemetry(event, telemetryState, { taskId: input.task.id, attemptId: input.attemptId, cwd: input.task.cwd });
       if (telemetryEvents.length) queueTelemetryEvents(telemetryEvents);
+
+      // Codex CLI continues to emit auto_retry_start / agent_start / turn_start /
+      // tool_execution_start AFTER a terminal `error` message_end while it recovers
+      // internally. Treat any such recovery activity as a cancellation of any
+      // pending terminal exit guard, and discard the stale error/thinking-only
+      // signal so it doesn't pollute the final classification.
+      if (isRecoveryStartEvent(event) && (stopReason === "error" || stopReason === "thinking_only_stop")) {
+        cancelTerminalExitGuard();
+        stopReason = undefined;
+        errorMessage = undefined;
+        sawTerminalAssistantMessage = false;
+      }
+
       const terminal = isTerminalAssistantEvent(event);
       if (terminal.terminal) {
-        sawTerminalAssistantMessage = true;
-        stopReason = terminal.stopReason;
-        if (terminal.errorMessage) errorMessage = terminal.errorMessage;
-        scheduleTerminalExitGuard();
+        if (terminal.stopReason === "error") {
+          // The CLI may auto-retry. Do NOT schedule the exit guard; rely on
+          // natural process close, or on subsequent recovery events to discard
+          // the error and reset state.
+          stopReason = terminal.stopReason;
+          if (terminal.errorMessage) errorMessage = terminal.errorMessage;
+          sawTerminalAssistantMessage = false;
+        } else if (terminal.thinkingOnly && !terminal.hasText) {
+          // The assistant ended its turn with only thinking blocks - no visible
+          // answer, no tool call. This is not a real completion; the worker
+          // never produced anything we can audit. Schedule the normal terminal
+          // guard so the process exits, but mark this as worker_incomplete so
+          // the parent can retry.
+          stopReason = "thinking_only_stop";
+          errorMessage = errorMessage ?? "assistant ended its turn with thinking-only content (no text or tool call)";
+          sawTerminalAssistantMessage = false;
+          scheduleTerminalExitGuard();
+        } else {
+          sawTerminalAssistantMessage = true;
+          stopReason = terminal.stopReason;
+          if (terminal.errorMessage) errorMessage = terminal.errorMessage;
+          scheduleTerminalExitGuard();
+        }
       }
     } catch {
       stdoutMalformedLines += 1;
@@ -207,6 +281,12 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
         finish(0);
       }, input.terminalExitGraceMs ?? 30000);
       terminalTimer.unref?.();
+    };
+
+    cancelTerminalExitGuard = () => {
+      if (!terminalTimer) return;
+      clearTimeout(terminalTimer);
+      terminalTimer = undefined;
     };
 
     const kill = () => {
@@ -269,8 +349,24 @@ export async function runWorkerAttempt(input: RunWorkerAttemptInput): Promise<At
   await Promise.all([stdoutWriteQueue, stderrWriteQueue, activityQueue, telemetryQueue]);
 
   const finishedAt = new Date().toISOString();
-  const status: RuntimeStatus = wasAborted || stopReason === "aborted" ? "aborted" : stopReason === "error" || errorMessage ? "error" : sawTerminalAssistantMessage && exitCode === 0 ? "success" : exitCode === 0 ? "success" : "error";
-  const failureKind: FailureKind = status === "aborted" ? "aborted" : status === "success" ? "none" : spawnError ? "launch_error" : "unknown";
+  const status: RuntimeStatus = wasAborted || stopReason === "aborted"
+    ? "aborted"
+    : stopReason === "error" || stopReason === "thinking_only_stop" || errorMessage
+      ? "error"
+      : sawTerminalAssistantMessage && exitCode === 0
+        ? "success"
+        : exitCode === 0
+          ? "success"
+          : "error";
+  const failureKind: FailureKind = status === "aborted"
+    ? "aborted"
+    : status === "success"
+      ? "none"
+      : spawnError
+        ? "launch_error"
+        : stopReason === "thinking_only_stop"
+          ? "worker_incomplete"
+          : "unknown";
 
   return {
     attemptId: input.attemptId,
