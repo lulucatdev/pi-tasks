@@ -239,6 +239,19 @@ The parent does not retry by default for:
 
 `worker-runner.ts` owns process lifecycle, stdout/stderr artifacts, and timer actions. It should not grow more terminal classification rules inline.
 
+## Worker Context Management
+
+Pi's built-in auto-compaction is session-scoped. In `AgentSession`, compaction is checked before prompt submission and after `agent_end`; `pi-agent-core` emits `agent_end` only after the whole agent loop finishes. Task workers are launched as `pi --mode json -p --no-session`, so they use an in-memory single-shot session and may perform many assistant/tool turns before any `agent_end` compaction checkpoint. Root-session compaction therefore does not automatically protect worker context growth.
+
+The task extension registers a child-only `context` hook (`PI_CHILD_TYPE=task`) before returning from `index.ts`. Before each provider call in the worker, `worker-context.ts` estimates token usage against `ctx.model.contextWindow`. When the context crosses the guard threshold, it:
+
+- preserves the original worker prompt;
+- preserves a recent suffix, adjusted so no `toolResult` is kept without its assistant tool-call message;
+- replaces the middle history with a deterministic `custom` summary message;
+- writes a `progress` event to `worker-events.jsonl` with estimated before/after token counts.
+
+The guard is deterministic and does not call another model. It prevents runaway tool-output accumulation inside a child worker, but it cannot fix an initially oversized task prompt. `tasks_plan` remains the primary defense against oversized launch payloads, and worker prompts instruct agents to use targeted reads, grep/search, offsets, and durable artifact notes instead of repeatedly loading huge files into context.
+
 ## UI and Rerun
 
 `/tasks-ui` reads batch artifacts, not session-only state. It presents:

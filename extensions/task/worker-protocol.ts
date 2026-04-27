@@ -131,6 +131,7 @@ export function buildWorkerSystemPrompt(): string {
     "## Working rules",
     "",
     "- You may read, write, edit, and run commands needed for the assigned work.",
+    "- Avoid filling your context with huge file dumps or command output. Prefer targeted `read` ranges, `grep`, summaries, and writing durable notes to files. If earlier tool history is compacted, continue from the filesystem and artifacts rather than re-reading everything.",
     "- Handle recoverable work errors yourself before reporting final status; record what you retried in `internalRetries`.",
     "- Do not spawn nested `task` / `tasks` / `tasks_plan` workers.",
     "- The structured `task_report` (or `task-report.json` file) is the ONLY completion protocol the supervisor trusts. Status text in chat does not count.",

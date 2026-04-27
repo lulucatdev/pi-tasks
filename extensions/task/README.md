@@ -114,6 +114,10 @@ A worker must submit:
 
 The supervisor trusts the structured report, not natural language claims or legacy `TASK_STATUS` markers. Thinking-only final turns and missing reports are `worker_incomplete` and parent-retryable when no valid report was produced.
 
+## Worker context guard
+
+Child workers run as `pi --mode json -p --no-session`, so root-session auto-compaction does not protect a long worker loop in the same way it protects the interactive parent. The task extension therefore registers a child-only `context` hook. Before each provider call inside a worker, it estimates context size; if the request is near the model window, it preserves the original worker prompt and the latest assistant/tool-result suffix, replaces middle tool history with a deterministic compact summary, and records a `progress` event in `worker-events.jsonl`. This is not a replacement for good worker discipline: prompts still tell workers to avoid huge dumps, use targeted reads/greps, and write durable notes to files.
+
 ## Acceptance contracts
 
 Acceptance can require files, forbid paths, check worker-log/report regexes, validate minimum sizes, and audit changed files against allowed/forbidden write paths. Git diff files and worker telemetry first become normalized `WriteEvidence[]`; `.pi/tasks/**` supervisor artifacts are ignored, exact paths match exactly, trailing slash patterns mean directory prefixes, and `*`/`**` keep glob behavior.
