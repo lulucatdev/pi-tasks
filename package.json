@@ -1,18 +1,18 @@
 {
-  "name": "pi-tasks",
+  "name": "pi-jobs",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local pi package for task/tasks runtime.",
+  "description": "Local pi package for supervised job runtime.",
   "keywords": [
     "pi-package",
     "pi",
-    "task",
-    "tasks"
+    "job",
+    "jobs"
   ],
   "scripts": {
-    "test": "node --test tests/task/*.mjs",
-    "smoke": "bash scripts/task-audit-smoke.sh"
+    "test": "node --test tests/jobs/*.mjs",
+    "smoke": "bash scripts/jobs-audit-smoke.sh"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
@@ -23,7 +23,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/task"
+      "./extensions/jobs"
     ]
   }
 }
